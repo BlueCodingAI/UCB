@@ -54,7 +54,10 @@ interface RequestOpts {
 }
 
 function buildUrl(path: string, query?: RequestOpts['query']): string {
-  const url = new URL(path.startsWith('http') ? path : `${API_BASE_URL}${path}`);
+  // Resolve against the page's own origin so a relative API_BASE_URL (e.g. "/api/v1")
+  // inherits the page's protocol + host — avoids HTTP/HTTPS mixed-content errors.
+  const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+  const url = new URL(path.startsWith('http') ? path : `${API_BASE_URL}${path}`, base);
   if (query) {
     for (const [k, v] of Object.entries(query)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
