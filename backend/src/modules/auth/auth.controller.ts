@@ -42,7 +42,7 @@ function setRefreshCookie(res: Response, token: string): void {
     httpOnly: true,
     path: '/',
     sameSite: 'strict',
-    secure: env.isProd,
+    secure: env.cookieSecure,
     signed: true,
     maxAge: env.refreshTokenTtlSec * 1000,
   });
@@ -53,7 +53,7 @@ function clearRefreshCookie(res: Response): void {
     httpOnly: true,
     path: '/',
     sameSite: 'strict',
-    secure: env.isProd,
+    secure: env.cookieSecure,
     signed: true,
   });
 }

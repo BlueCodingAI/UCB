@@ -35,7 +35,7 @@ function setAdminCookie(res: Response, token: string): void {
     httpOnly: true,
     path: '/',
     sameSite: 'strict',
-    secure: env.isProd,
+    secure: env.cookieSecure,
     signed: true,
     maxAge: env.refreshTokenTtlSec * 1000,
   });
@@ -46,7 +46,7 @@ function clearAdminCookie(res: Response): void {
     httpOnly: true,
     path: '/',
     sameSite: 'strict',
-    secure: env.isProd,
+    secure: env.cookieSecure,
     signed: true,
   });
 }

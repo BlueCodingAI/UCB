@@ -47,6 +47,10 @@ export const env = {
   refreshTokenTtlSec: num('REFRESH_TOKEN_TTL_SEC', 30 * 24 * 60 * 60),
   otpPepper: str('OTP_PEPPER', 'dev-otp-pepper-change-me'),
   cookieSecret: str('COOKIE_SECRET', 'dev-cookie-secret-change-me'),
+  // Set the Secure flag on auth cookies. Defaults to prod, but MUST be false
+  // when serving over plain HTTP (e.g. an IP-only deploy with no SSL) or the
+  // browser will silently drop the refresh cookie and logins won't persist.
+  cookieSecure: bool('COOKIE_SECURE', NODE_ENV === 'production'),
 
   // OpenAI
   openaiApiKey: str('OPENAI_API_KEY'),
