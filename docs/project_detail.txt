@@ -1,0 +1,75 @@
+*Requirement: Multilingual CAP Guidance Web App*
+
+We want a multilingual web app with *AI chat + voice bot* for students/parents regarding the *Centralised Admission Process (CAP) in Maharashtra* conducted by *Maharashtra State CET Cell, Government of Maharashtra. The app will be a **guidance & counselling support platform*, not the official admission portal; official CET Cell website and CAP portals remain the authoritative source for notices, schedules, rules, and allotments. [cetcell.mahacet](https://cetcell.mahacet.org)
+
+*Languages:* English, Hindi, Marathi (both chat and voice).
+
+*Core Bot Rule:*
+- Chat bot and voice bot must answer *strictly only from the admin-uploaded knowledge base*.
+- Must NOT answer from general internet knowledge or AI assumptions.
+- If answer is not in knowledge base, show fallback:  
+  “This information is not available in the current knowledge base. Please check the official CET Cell / CAP website or contact support.”
+
+*Knowledge Base:*
+- Admin can upload/manage: PDFs, Google Sheets, FAQs, notices, circulars, schedules, counselling notes.
+- Admin can upload, update, replace, delete, activate/deactivate, tag (course, year, language, topic), and re-index documents.
+- Bot answers must be grounded in uploaded source content.
+
+*User Plans:*
+1. *Freemium:* Free for general CAP queries.
+2. *Premium:* INR 99 for 1 year or till admission cut-off date (whichever is earlier).  
+   Includes: Freemium + saved user profile memory + personalized next-step suggestions + CAP counselling assistance.
+3. *Super Premium:* INR 499 for 1 year or till admission cut-off date (whichever is earlier).  
+   Includes: Premium + one-to-one counselling + direct guidance + in-person counselling workflow support.
+
+*Key Features:*
+- Landing website + pricing page
+- User login (OTP/email/password)
+- Chat bot + voice bot (all 3 languages)
+- User profile memory for paid users
+- Personalized next-step recommendations (registration, document verification, merit list, option form, allotment, reporting, etc.)
+- Counselling request & appointment workflow
+- Notifications/reminders (in-app, email, optional WhatsApp/SMS)
+- Payment integration (INR)
+- Admin panel with full user management
+- Advertisement banner management in UI (upload, activate, date range, placement, track clicks/impressions)
+
+*Admin Panel Must Include:*
+- User details: name, mobile, email, location, plan, validity, profile, language, chat usage, counselling status, payment status.
+- Knowledge base management (PDFs, spreadsheets, FAQs, notices).
+- Plan pricing & validity configuration.
+- Broadcasting notifications.
+- Counselling lead & appointment management.
+- Banner management (place, schedule, click/impression tracking).
+
+*Seasonal Usage:*
+This is a *seasonal-demand app. Very high usage expected during peak admission season, especially in **June, July, and August*. CAP-related registration, merit lists, option filling, and allotments typically intensify in this window. [cetcell.mahacet](https://cetcell.mahacet.org/time-table/)
+
+*Design Requirement:*
+- Infrastructure must support high peak-season concurrency.
+- Must remain fast, stable, and scalable during June–August.
+- Mobile-first, responsive design.
+
+*Technical Requirement:*
+- Built as *knowledge-base-first RAG system* with strict guardrails.
+- Answers only from uploaded documents.
+- Easy yearly update for new CAP cycle.
+
+*Deliverables:*
+- Full responsive web app
+- Admin panel
+- Chat bot + voice bot (EN/HI/MR)
+- Payment gateway
+- Knowledge base management
+- User profile memory for paid users
+- Counselling workflow
+- Advertisement banner module
+- Deployment on cloud/live server
+- Admin documentation
+- Yearly CAP update support
+
+*Important:*
+This must be a *controlled guidance platform* where every bot answer is grounded in admin-approved knowledge only, not an open-ended chatbot. Official CET Cell portals remain the final authority; our app is for guidance, reminders, and counselling. [cetcell.mahacet](https://cetcell.mahacet.org/cap-_2025-26/)
+
+
+

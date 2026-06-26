@@ -1,0 +1,298 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (toggled by ThemeProvider on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ===========================================================================
+   Disha design system — Premium SaaS, elevated teal + marigold.
+   Fonts come from next/font CSS variables set in the root layout:
+   --font-bricolage, --font-noto-deva, --font-noto-serif-deva, --font-ibm-mono
+   =========================================================================== */
+@theme {
+  /* surfaces — crisp, airy, a hint of warmth */
+  --color-ground: #fbfaf7;
+  --color-surface: #ffffff;
+  --color-surface-sunk: #f3f2ed;
+  --color-surface-raised: #ffffff;
+
+  /* brand teal (deep ink → interactive → bright for gradients) */
+  --color-primary: #133a43;
+  --color-primary-700: #0c5247;
+  --color-primary-600: #0e7c6b;
+  --color-primary-500: #12a48c;
+  --color-primary-400: #38c0a8;
+
+  /* marigold accent */
+  --color-accent: #e8881a;
+  --color-accent-600: #d2760f;
+  --color-accent-400: #f4a93c;
+  --color-accent-soft: #fcecd2;
+  --color-accent-ink: #2a1700;
+
+  /* semantic */
+  --color-success: #0e9f80;
+  --color-warning: #e8881a;
+  --color-danger: #d4493b;
+
+  /* lines + text */
+  --color-border: #e9e6df;
+  --color-border-strong: #d7d3c8;
+  --color-ink: #15242b;
+  --color-ink-2: #46535d;
+  --color-ink-3: #76828c;
+  --color-on-dark: #eaf3f1;
+
+  /* fonts */
+  --font-display: var(--font-bricolage), "Bricolage Grotesque", system-ui, sans-serif;
+  --font-sans: var(--font-noto-deva), "Noto Sans Devanagari", system-ui, sans-serif;
+  --font-deva-serif: var(--font-noto-serif-deva), "Noto Serif Devanagari", serif;
+  --font-mono: var(--font-ibm-mono), "IBM Plex Mono", ui-monospace, monospace;
+
+  /* radii — a touch larger for the premium, soft-rounded feel */
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-2xl: 36px;
+  --radius-pill: 999px;
+
+  /* shadows — soft, layered, cool-tinted (Linear/Stripe depth) */
+  --shadow-xs: 0 1px 2px rgba(16, 35, 40, 0.05);
+  --shadow-sm: 0 1px 3px rgba(16, 35, 40, 0.06), 0 1px 2px rgba(16, 35, 40, 0.04);
+  --shadow-md: 0 4px 14px -3px rgba(16, 35, 40, 0.09), 0 2px 6px -3px rgba(16, 35, 40, 0.05);
+  --shadow-lg: 0 14px 38px -10px rgba(16, 40, 46, 0.14), 0 6px 14px -6px rgba(16, 40, 46, 0.07);
+  --shadow-xl: 0 30px 70px -22px rgba(13, 42, 48, 0.28), 0 10px 24px -12px rgba(13, 42, 48, 0.12);
+  --shadow-accent: 0 10px 26px -8px rgba(232, 136, 26, 0.45);
+  --shadow-ring: 0 0 0 1px rgba(16, 35, 40, 0.06);
+
+  /* gradients */
+  --gradient-brand: linear-gradient(135deg, #0e7c6b 0%, #12a48c 55%, #38c0a8 100%);
+  --gradient-accent: linear-gradient(135deg, #f4a93c 0%, #e8881a 100%);
+  --gradient-ink: linear-gradient(180deg, #1a4a52 0%, #0e2e34 100%);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 0.68, 0.16, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.5, 1);
+
+  --animate-fade-up: fade-up 0.55s var(--ease-out) both;
+  --animate-fade-in: fade-in 0.5s var(--ease-out) both;
+  --animate-bubble-in: bubble-in 0.24s var(--ease-out) both;
+  --animate-node-pulse: node-pulse 2.6s ease-in-out infinite;
+  --animate-rec-shimmer: rec-shimmer 1.4s linear infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-pulse-ring: pulse-ring 2.4s var(--ease-out) infinite;
+}
+
+@keyframes fade-up {
+  0% { opacity: 0; transform: translateY(14px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes bubble-in {
+  0% { opacity: 0; transform: translateY(6px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes node-pulse {
+  0%, 100% { box-shadow: 0 0 0 5px rgba(14, 124, 107, 0.16); }
+  50% { box-shadow: 0 0 0 9px rgba(14, 124, 107, 0.06); }
+}
+@keyframes rec-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(14, 124, 107, 0.35); }
+  70% { box-shadow: 0 0 0 16px rgba(14, 124, 107, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(14, 124, 107, 0); }
+}
+
+:root {
+  color-scheme: light;
+  --ring: 0 0 0 4px rgba(14, 124, 107, 0.16);
+}
+
+.dark {
+  color-scheme: dark;
+  --color-ground: #0a1418;
+  --color-surface: #101e24;
+  --color-surface-sunk: #0c181d;
+  --color-surface-raised: #14242b;
+  --color-primary: #6fd9c5;
+  --color-primary-700: #1f8f7b;
+  --color-primary-600: #2bb39a;
+  --color-primary-500: #3fc8ad;
+  --color-primary-400: #5fd9c4;
+  --color-accent: #f6a93c;
+  --color-accent-600: #e8881a;
+  --color-accent-400: #f9c06a;
+  --color-accent-soft: #3a2c12;
+  --color-accent-ink: #fff3e0;
+  --color-success: #2bb39a;
+  --color-warning: #f6a93c;
+  --color-danger: #ef6b5c;
+  --color-border: #233741;
+  --color-border-strong: #33505c;
+  --color-ink: #e7eeed;
+  --color-ink-2: #aec0bf;
+  --color-ink-3: #7e9290;
+  --color-on-dark: #e7eeed;
+  --gradient-ink: linear-gradient(180deg, #16323a 0%, #0b1c21 100%);
+  --shadow-md: 0 4px 14px -3px rgba(0, 0, 0, 0.4), 0 2px 6px -3px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 14px 38px -10px rgba(0, 0, 0, 0.55);
+  --shadow-xl: 0 30px 70px -22px rgba(0, 0, 0, 0.7);
+  --ring: 0 0 0 4px rgba(43, 179, 154, 0.28);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--color-border);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+  body {
+    margin: 0;
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  h1, h2, h3 {
+    color: var(--color-primary);
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    margin: 0;
+  }
+  a {
+    color: var(--color-primary-600);
+    text-decoration: none;
+    text-underline-offset: 3px;
+  }
+  a:hover { color: var(--color-primary-700); }
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+    border-radius: var(--radius-xs);
+  }
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+  }
+  img { max-width: 100%; height: auto; }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-ink-3) 45%, transparent);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--color-ink-3) 70%, transparent); background-clip: content-box; }
+}
+
+@layer components {
+  /* Latin display face — opt-in so Devanagari never falls back to a Latin-only font. */
+  .font-display {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }
+  .deva-serif { font-family: var(--font-deva-serif); font-weight: 700; }
+  .font-mono { font-family: var(--font-mono); }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-primary-600);
+    font-weight: 500;
+  }
+
+  .container-page {
+    width: 100%;
+    max-width: 78rem;
+    margin-inline: auto;
+    padding-inline: 1.5rem;
+  }
+
+  /* Frosted-glass surface (sticky nav, floating panels). */
+  .glass {
+    background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+  }
+
+  /* Gradient text (use on a single highlighted phrase). */
+  .text-gradient {
+    background: var(--gradient-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .text-gradient-accent {
+    background: var(--gradient-accent);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Eyebrow / status pill used across marketing. */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+    box-shadow: var(--shadow-xs);
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  /* Soft radial brand glow for hero/section backdrops. */
+  .glow-brand {
+    background:
+      radial-gradient(60% 60% at 50% 0%, color-mix(in srgb, var(--color-primary-500) 22%, transparent) 0%, transparent 70%),
+      radial-gradient(40% 50% at 85% 20%, color-mix(in srgb, var(--color-accent) 16%, transparent) 0%, transparent 70%);
+  }
+
+  /* Subtle dot grid backdrop. */
+  .bg-dots {
+    background-image: radial-gradient(color-mix(in srgb, var(--color-ink-3) 22%, transparent) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* Hairline divider used between sections. */
+  .rule {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--color-border), transparent);
+  }
+}
+
+@layer utilities {
+  .section-pad { padding-block: clamp(4rem, 9vw, 8rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

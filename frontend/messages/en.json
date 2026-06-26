@@ -1,0 +1,355 @@
+{
+  "common": {
+    "appName": "Disha",
+    "tagline": "Your calm guide through CAP",
+    "getStarted": "Get started",
+    "tryTheBot": "Try the bot",
+    "login": "Log in",
+    "signup": "Sign up",
+    "logout": "Log out",
+    "learnMore": "Learn more",
+    "loading": "Loading…",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "submit": "Submit",
+    "continue": "Continue",
+    "back": "Back",
+    "next": "Next",
+    "close": "Close",
+    "upgrade": "Upgrade",
+    "viewAll": "View all",
+    "search": "Search",
+    "comingSoon": "Coming soon",
+    "free": "Free",
+    "perYear": "/ year or till cut-off",
+    "officialSource": "Official source: cetcell.mahacet.org"
+  },
+  "nav": {
+    "home": "Home",
+    "features": "Features",
+    "pricing": "Pricing",
+    "faq": "FAQ",
+    "about": "About",
+    "contact": "Contact"
+  },
+  "footer": {
+    "product": "Product",
+    "company": "Company",
+    "legal": "Legal",
+    "terms": "Terms of Service",
+    "privacy": "Privacy Policy",
+    "refund": "Refund Policy",
+    "contact": "Contact",
+    "disclaimer": "Disha is an unofficial guidance & counselling support platform. It is not the official admission portal. For notices, schedules, rules and allotments, always refer to the official Maharashtra CET Cell website.",
+    "rights": "All rights reserved."
+  },
+  "disclaimer": {
+    "short": "Unofficial guidance platform — not the official admission portal.",
+    "full": "Disha provides guidance and counselling support only. The Maharashtra State CET Cell and official CAP portals remain the authoritative source for all notices, schedules, rules and allotments.",
+    "visitOfficial": "Visit official CET Cell site"
+  },
+  "language": {
+    "label": "Language",
+    "en": "English",
+    "hi": "हिन्दी",
+    "mr": "मराठी"
+  },
+  "theme": {
+    "toggle": "Toggle theme",
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "landing": {
+    "hero": {
+      "eyebrow": "Maharashtra CAP · EN · हिं · मरा",
+      "title": "Find your way through CAP, step by step.",
+      "subtitle": "Ask in English, Hindi or Marathi — by chat or voice. Every answer comes only from verified, admin-approved knowledge, with the source shown.",
+      "ctaPrimary": "Start free",
+      "ctaSecondary": "See how it works",
+      "trust": "Guidance & counselling support — not the official portal."
+    },
+    "features": {
+      "title": "Built to lower the heart rate",
+      "subtitle": "Clear, grounded help for students and parents during the busiest months of admission.",
+      "multilingual": { "title": "Chat & voice in 3 languages", "body": "Converse naturally in English, Hindi or Marathi. Speak your question and hear the answer back." },
+      "grounded": { "title": "Answers only from verified knowledge", "body": "The bot replies strictly from admin-uploaded notices and FAQs — never guesses — and always shows its source." },
+      "nextSteps": { "title": "Know what to do next", "body": "Personalised next-step guidance across registration, verification, merit list, option form, allotment and reporting." },
+      "counselling": { "title": "Counselling when you need it", "body": "Request assistance, book one-to-one sessions, and get in-person counselling support." }
+    },
+    "how": {
+      "title": "How it works",
+      "step1": { "title": "Ask your question", "body": "Type or speak in your language." },
+      "step2": { "title": "Get a grounded answer", "body": "Sourced only from verified CAP knowledge." },
+      "step3": { "title": "See your next step", "body": "Personalised guidance for where you are in CAP." }
+    },
+    "journey": { "title": "The CAP journey", "subtitle": "Disha knows where you are and quietly tells you what's next." },
+    "cta": { "title": "Ready to begin?", "subtitle": "Start free today. Upgrade any time for memory, next steps and counselling.", "button": "Create your free account" },
+    "trust": {
+      "eyebrow": "Trusted guidance",
+      "kbOnly": "Answers only from verified knowledge",
+      "languages": "English, Hindi & Marathi",
+      "sources": "Every answer shows its source",
+      "official": "Not the official portal — guidance only"
+    },
+    "plansTeaser": {
+      "eyebrow": "Plans",
+      "title": "Start free, upgrade when you need more",
+      "subtitle": "Begin with general CAP guidance at no cost. Add profile memory, next steps and counselling whenever you are ready.",
+      "seeAll": "Compare all plans"
+    },
+    "testimonials": {
+      "eyebrow": "What families say",
+      "title": "Calm company through a stressful season",
+      "items": {
+        "0": { "quote": "I kept losing track of option-form dates. Disha told me exactly what was due next, in Marathi. It felt like having a patient elder explain everything.", "name": "Sai Patil", "role": "Parent, Pune" },
+        "1": { "quote": "I asked everything in Hindi by voice while travelling. Every answer pointed back to the official notice, so I always knew it was right.", "name": "Aarti Deshmukh", "role": "Student, Nagpur" },
+        "2": { "quote": "The next-steps list took the guesswork out of CAP. We knew what to do after the merit list without panicking.", "name": "Rahul More", "role": "Parent, Nashik" }
+      }
+    },
+    "ctaSecondaryNote": "Free to start. No card needed."
+  },
+  "pricing": {
+    "title": "Simple plans for the CAP season",
+    "subtitle": "Validity is 1 year or till the admission cut-off date — whichever is earlier.",
+    "mostChosen": "Most chosen",
+    "current": "Current plan",
+    "choose": "Choose plan",
+    "startFree": "Start free",
+    "validityNote": "Validity: 1 year or till admission cut-off (whichever is earlier).",
+    "paymentNote": "Secure INR payments via Razorpay — UPI, cards & net-banking.",
+    "feature": {
+      "generalQueries": "General CAP queries (chat & voice)",
+      "threeLanguages": "English, Hindi & Marathi",
+      "profileMemory": "Saved profile memory",
+      "nextSteps": "Personalised next-step suggestions",
+      "counsellingAssist": "CAP counselling assistance",
+      "oneToOne": "One-to-one counselling",
+      "inPerson": "In-person counselling support"
+    },
+    "eyebrow": "Pricing",
+    "perYear": "/ year or till cut-off",
+    "featuresHeading": "What's included",
+    "dailyLimit": "{limit} chat messages a day",
+    "dailyUnlimited": "Unlimited chat messages",
+    "faqTitle": "Pricing questions",
+    "faq": {
+      "items": {
+        "0": { "q": "What does the validity period mean?", "a": "Every paid plan stays active for one year from purchase, or until the official admission cut-off date — whichever comes first. This keeps a plan aligned to a single CAP season." },
+        "1": { "q": "Which payment methods can I use?", "a": "Payments are processed securely in INR through Razorpay. You can pay using UPI, debit or credit cards, and net-banking." },
+        "2": { "q": "Can I upgrade later?", "a": "Yes. Start on the free plan and upgrade to Premium or Super Premium any time from your billing page. Your guidance carries over." },
+        "3": { "q": "Do you offer refunds?", "a": "Because access is granted instantly, refunds are limited. Please read our refund policy for the full details before purchasing." }
+      }
+    }
+  },
+  "features": {
+    "eyebrow": "Features",
+    "title": "Everything you need to move through CAP with confidence",
+    "subtitle": "Disha brings grounded answers, your language, and clear next steps into one calm place.",
+    "items": {
+      "multilingual": {
+        "title": "Ask by chat or voice, in your language",
+        "body": "Type or speak naturally in English, Hindi or Marathi. Hear answers read back aloud — useful on the move or for parents who prefer to listen.",
+        "points": { "0": "Real Devanagari, never transliterated", "1": "Voice questions and spoken replies", "2": "Switch language any time" }
+      },
+      "grounded": {
+        "title": "Answers only from verified knowledge",
+        "body": "The bot replies strictly from notices and FAQs uploaded and approved by admins. When something isn't in the knowledge base, it says so honestly instead of guessing.",
+        "points": { "0": "No invented information", "1": "A clear fallback when unsure", "2": "Every answer shows its source" }
+      },
+      "sources": {
+        "title": "See the source behind every answer",
+        "body": "Each grounded reply carries citation chips that link to the exact notice or FAQ it came from, so you can always check the original.",
+        "points": { "0": "Citation chips on every reply", "1": "Linked to the original document", "2": "Cross-check against the official site" }
+      },
+      "nextSteps": {
+        "title": "Know exactly what to do next",
+        "body": "Personalised next-step guidance follows you across registration, document verification, merit list, option form, allotment and reporting.",
+        "points": { "0": "Tailored to where you are in CAP", "1": "Gentle reminders for what's due", "2": "Mark steps done as you go" }
+      },
+      "profile": {
+        "title": "A profile that remembers your context",
+        "body": "Save your category, courses and preferences once. Disha uses that context to make answers and next steps more relevant to you.",
+        "points": { "0": "Saved category and course interests", "1": "More relevant guidance", "2": "Yours to edit or delete any time" }
+      },
+      "counselling": {
+        "title": "Human counselling when you need it",
+        "body": "Request CAP assistance, book one-to-one sessions, or arrange in-person counselling support — guided help beyond the bot.",
+        "points": { "0": "Request assistance in a tap", "1": "One-to-one online sessions", "2": "In-person support options" }
+      }
+    },
+    "cta": { "title": "See it for yourself", "subtitle": "Create a free account and ask your first CAP question in minutes.", "button": "Start free" }
+  },
+  "faq": {
+    "eyebrow": "Help",
+    "title": "Frequently asked questions",
+    "subtitle": "Quick answers about how Disha works, your data, and the CAP process.",
+    "stillStuck": "Still have a question?",
+    "stillStuckBody": "We're happy to help. Reach out and we'll get back to you.",
+    "contactUs": "Contact us",
+    "items": {
+      "0": { "q": "Is Disha the official CAP admission portal?", "a": "No. Disha is an independent guidance and counselling support platform. It is not affiliated with the Maharashtra CET Cell. For official notices, schedules, rules and allotments, always rely on the official CET Cell website." },
+      "1": { "q": "Where do the bot's answers come from?", "a": "Every answer is drawn strictly from a knowledge base of notices and FAQs uploaded and approved by our team. The bot never uses general internet knowledge, and it shows the source for each answer." },
+      "2": { "q": "What happens if my question isn't covered?", "a": "Instead of guessing, the bot tells you the information isn't in its knowledge base and points you to the official CET Cell / CAP website or to support." },
+      "3": { "q": "Which languages are supported?", "a": "You can chat and use voice in English, Hindi and Marathi. Hindi and Marathi are shown in proper Devanagari script, never transliterated." },
+      "4": { "q": "Is there a free plan?", "a": "Yes. The free plan covers general CAP queries by chat and voice in all three languages. Paid plans add profile memory, personalised next steps and counselling." },
+      "5": { "q": "Is my personal information safe?", "a": "We collect only what is needed to provide guidance, and you can edit or delete your saved profile at any time. See our privacy policy for the full picture." }
+    }
+  },
+  "about": {
+    "eyebrow": "About Disha",
+    "title": "Calm, trustworthy guidance through Maharashtra CAP",
+    "lead": "Admission season is stressful enough. Disha exists to make the Centralised Admission Process easier to understand — in the language families actually speak.",
+    "missionTitle": "Why we built Disha",
+    "missionBody": "Every year, lakhs of students and parents navigate CAP under real pressure — deadlines, documents, merit lists and option forms. Reliable information is scattered and often only in English. Disha gathers verified guidance into one place and answers your questions in English, Hindi or Marathi, by chat or voice.",
+    "valuesTitle": "What we stand for",
+    "values": {
+      "grounded": { "title": "Grounded, never guessing", "body": "Answers come only from verified, admin-approved knowledge — with the source shown every time." },
+      "multilingual": { "title": "Truly multilingual", "body": "First-class Hindi and Marathi in real Devanagari, so no family is left reading a second language under pressure." },
+      "honest": { "title": "Honest about our role", "body": "We are guidance and counselling support — not the official portal. We always point you back to the official source." },
+      "calm": { "title": "Designed to lower the heart rate", "body": "Clear next steps and a gentle, second-person voice that treats you like a person, not a ticket number." }
+    },
+    "disclaimerTitle": "An important note",
+    "ctaTitle": "Walk through CAP with a steady guide",
+    "ctaButton": "Start free"
+  },
+  "contact": {
+    "eyebrow": "Contact",
+    "title": "Get in touch",
+    "subtitle": "Questions, feedback or trouble using Disha? Send us a message and we'll reply by email.",
+    "name": "Your name",
+    "email": "Email address",
+    "message": "Message",
+    "messagePlaceholder": "How can we help?",
+    "send": "Send message",
+    "sent": "Thanks — your message has been sent. We'll get back to you by email.",
+    "supportTitle": "Prefer email?",
+    "supportBody": "Write to us directly and we'll respond as soon as we can.",
+    "supportEmail": "support@disha.app",
+    "officialTitle": "Looking for official CAP information?",
+    "officialBody": "For notices, schedules, rules and allotments, the Maharashtra CET Cell website is the authoritative source."
+  },
+  "legal": {
+    "lastUpdated": "Last updated",
+    "lastUpdatedValue": "June 2026",
+    "terms": {
+      "eyebrow": "Legal",
+      "title": "Terms of Service",
+      "intro": "These terms govern your use of Disha. By creating an account or using the service, you agree to them. Please read them alongside our privacy and refund policies.",
+      "sections": {
+        "0": { "h": "1. About the service", "p": "Disha is an independent guidance and counselling support platform for the Maharashtra Centralised Admission Process (CAP). It is not the official admission portal and is not affiliated with the Maharashtra CET Cell." },
+        "1": { "h": "2. Guidance, not official decisions", "p": "Information provided by Disha is for guidance only. Official notices, schedules, eligibility rules, merit lists and allotments are determined solely by the CET Cell and official CAP portals. Always verify decisions against the official source." },
+        "2": { "h": "3. Your account", "p": "You are responsible for keeping your login details secure and for activity under your account. Provide accurate information and keep it up to date." },
+        "3": { "h": "4. Acceptable use", "p": "Do not misuse the service, attempt to disrupt it, or use it for unlawful purposes. We may suspend accounts that abuse the platform." },
+        "4": { "h": "5. Plans and payments", "p": "Paid plans grant access to additional features for a stated validity period. Payments are processed by our payment partner. See the refund policy for details on refunds." },
+        "5": { "h": "6. Limitation of liability", "p": "Disha is provided on an as-is basis. We are not liable for admission outcomes or for decisions made based on guidance. Your admission depends entirely on the official CAP process." },
+        "6": { "h": "7. Changes to these terms", "p": "We may update these terms from time to time. Continued use after changes means you accept the updated terms." }
+      }
+    },
+    "privacy": {
+      "eyebrow": "Legal",
+      "title": "Privacy Policy",
+      "intro": "This policy explains what information Disha collects, how we use it, and the choices you have. We collect only what is needed to provide guidance.",
+      "sections": {
+        "0": { "h": "1. Information we collect", "p": "Account details such as your name, email or mobile number; the language you prefer; and, if you choose, profile information like your category and course interests to personalise guidance." },
+        "1": { "h": "2. How we use your information", "p": "To provide and improve guidance, personalise next steps, process payments, send service notifications, and keep the platform secure." },
+        "2": { "h": "3. Your chats and questions", "p": "Your questions are used to generate grounded answers from our knowledge base and may be stored to maintain your chat history and improve quality." },
+        "3": { "h": "4. Sharing", "p": "We do not sell your personal information. We share data only with service providers who help us operate Disha, such as payment and messaging partners, under appropriate safeguards." },
+        "4": { "h": "5. Your choices", "p": "You can view, edit or delete your saved profile at any time, and manage notification preferences from your settings." },
+        "5": { "h": "6. Data security", "p": "We use reasonable technical and organisational measures to protect your information. No system is perfectly secure, so please keep your credentials safe." },
+        "6": { "h": "7. Contact", "p": "For privacy questions or requests, contact us at the support email listed on our contact page." }
+      }
+    },
+    "refund": {
+      "eyebrow": "Legal",
+      "title": "Refund Policy",
+      "intro": "This policy explains how refunds work for paid Disha plans. Please read it before purchasing.",
+      "sections": {
+        "0": { "h": "1. Instant access", "p": "Paid plans unlock premium features immediately after a successful payment. Because access is granted instantly, purchases are generally non-refundable." },
+        "1": { "h": "2. When refunds may apply", "p": "If you were charged more than once for the same plan, or a payment was deducted without access being granted, contact support and we will investigate and refund duplicate or failed charges." },
+        "2": { "h": "3. Validity", "p": "Plan validity is one year from purchase or until the official admission cut-off date, whichever is earlier. Refunds are not provided for unused time within an active validity period." },
+        "3": { "h": "4. How to request", "p": "Email support with your registered email and payment reference. Approved refunds are returned to the original payment method through our payment partner." }
+      }
+    }
+  },
+  "notFound": {
+    "code": "404",
+    "title": "We couldn't find that page",
+    "body": "The page you're looking for may have moved or never existed. Let's get you back on track.",
+    "home": "Back to home",
+    "explore": "Explore features"
+  },
+  "auth": {
+    "loginTitle": "Welcome back",
+    "loginSubtitle": "Log in to continue your CAP guidance.",
+    "signupTitle": "Create your account",
+    "signupSubtitle": "Free CAP guidance in your language.",
+    "email": "Email",
+    "password": "Password",
+    "name": "Full name",
+    "mobile": "Mobile number",
+    "otp": "One-time password",
+    "sendOtp": "Send OTP",
+    "verifyOtp": "Verify & continue",
+    "useOtp": "Log in with OTP instead",
+    "usePassword": "Log in with password",
+    "forgot": "Forgot password?",
+    "noAccount": "Don't have an account?",
+    "haveAccount": "Already have an account?",
+    "resend": "Resend OTP",
+    "resetTitle": "Reset your password",
+    "newPassword": "New password"
+  },
+  "appNav": {
+    "dashboard": "Dashboard",
+    "chat": "Chat",
+    "voice": "Voice",
+    "nextSteps": "Next steps",
+    "counselling": "Counselling",
+    "notices": "Notices",
+    "notifications": "Notifications",
+    "profile": "Profile",
+    "settings": "Settings",
+    "billing": "Billing",
+    "more": "More"
+  },
+  "chat": {
+    "title": "CAP Chat",
+    "placeholder": "Ask about registration, option form, merit list…",
+    "send": "Send",
+    "thinking": "Looking it up…",
+    "newChat": "New chat",
+    "suggestedTitle": "Try asking",
+    "source": "Source",
+    "fallbackBadge": "Not in knowledge base",
+    "usage": "{used} / {limit} messages today",
+    "voiceMode": "Voice mode"
+  },
+  "voice": {
+    "title": "CAP Voice",
+    "tapToSpeak": "Tap to speak",
+    "listening": "Listening…",
+    "transcribing": "Transcribing…",
+    "answering": "Finding your answer…",
+    "speaking": "Speaking…",
+    "switchToChat": "Switch to text chat",
+    "yourQuestion": "You asked",
+    "play": "Play answer",
+    "notSupported": "Voice is not available right now."
+  },
+  "plan": {
+    "freemium": "Freemium",
+    "premium": "Premium",
+    "super_premium": "Super Premium",
+    "locked": "Upgrade to unlock",
+    "upsellTitle": "This is a premium feature",
+    "upsellBody": "Upgrade your plan to save your profile, get personalised next steps and counselling."
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "network": "Could not reach the server. Check your connection.",
+    "unauthorized": "Please log in to continue.",
+    "rateLimited": "Too many requests. Please slow down."
+  }
+}

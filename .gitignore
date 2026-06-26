@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Builds
+dist/
+.next/
+out/
+build/
+
+# Env
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env.local
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+backend/data/*.sqlite*
+backend/data/*.db*
+
+# Uploads (runtime user content)
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+backend/storage/audio/*
+!backend/storage/audio/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Misc
+coverage/
+*.tsbuildinfo
+next-env.d.ts
