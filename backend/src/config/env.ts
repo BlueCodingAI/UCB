@@ -57,6 +57,18 @@ export const env = {
   openaiChatModel: str('OPENAI_CHAT_MODEL', 'gpt-4o-mini'),
   openaiEmbeddingModel: str('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
   embeddingDim: num('EMBEDDING_DIM', 1536),
+  // Document Q&A engine (OpenAI file understanding). When enabled, uploaded docs
+  // are ingested by OpenAI (Files + Vector Store) and answered via the Responses
+  // API with file_search — far better PDF/table parsing than the local pipeline.
+  // Hybrid: if the whole active KB fits the char budget we send the full files in
+  // context (the model sees ALL info, incl. complete tables); otherwise we use
+  // file_search retrieval. Falls back to the local SQLite RAG when disabled / no key.
+  openaiFileSearchEnabled: bool('OPENAI_FILE_SEARCH', true),
+  openaiDocModel: str('OPENAI_DOC_MODEL', 'gpt-4o'),
+  // ~70K tokens of source (≈4 chars/token) — well within gpt-4o's 128K context,
+  // leaving room for the prompt + a long table answer.
+  kbWholeFileMaxChars: num('KB_WHOLE_FILE_MAX_CHARS', 280000),
+  ragFileSearchMaxResults: num('RAG_FILE_SEARCH_MAX_RESULTS', 30),
   // Outbound proxy for OpenAI requests (e.g. when the server is behind a firewall).
   openaiProxyEnabled: bool('OPENAI_PROXY_ENABLED', false),
   openaiProxyUrl: str('OPENAI_PROXY_URL'), // http(s)://[user:pass@]host:port
@@ -111,6 +123,8 @@ export const env = {
 
 export const integrations = {
   openaiEnabled: Boolean(env.openaiApiKey),
+  // OpenAI document-understanding engine is usable only with a key + the flag on.
+  openaiDocsEnabled: Boolean(env.openaiApiKey) && env.openaiFileSearchEnabled,
   sarvamEnabled: Boolean(env.sarvamApiKey),
   razorpayEnabled: Boolean(env.razorpayKeyId && env.razorpayKeySecret),
   emailEnabled: Boolean(env.smtpHost && env.smtpUser),

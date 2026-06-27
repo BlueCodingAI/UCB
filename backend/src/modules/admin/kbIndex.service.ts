@@ -5,8 +5,17 @@ import { db } from '../../db/connection';
 import { newId } from '../../lib/ids';
 import { now } from '../../lib/time';
 import { logger } from '../../lib/logger';
-import { env } from '../../config/env';
-import { embedBatch, currentEmbeddingModel } from '../../services/openai';
+import { env, integrations } from '../../config/env';
+import {
+  embedBatch,
+  currentEmbeddingModel,
+  uploadOpenAIFile,
+  ensureVectorStore,
+  getVectorStoreId,
+  addFileToVectorStore,
+  removeFileFromVectorStore,
+  deleteOpenAIFile,
+} from '../../services/openai';
 import { encodeEmbedding, rebuildVectorCache } from '../../services/vectorStore';
 import { registerJobHandler } from '../../services/jobs';
 
@@ -22,6 +31,7 @@ interface KbDocRow {
   cap_year: number | null;
   language: string;
   topic: string | null;
+  openai_file_id: string | null;
 }
 
 const TARGET_CHARS = 2000; // ~500 tokens
@@ -161,6 +171,55 @@ const insertChunkStmt = db.prepare(
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, '{}', ?)`,
 );
 
+/** Sanitise a document title into a safe filename stem for the OpenAI upload. */
+function safeFileStem(title: string): string {
+  const s = title.replace(/[^\w\-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return (s || 'document').slice(0, 80);
+}
+
+/**
+ * Ingest a document into the OpenAI document engine: upload the source (the
+ * original PDF, or a .txt rendering for every other type — so tables/sheets
+ * become searchable too) and attach it to the shared KB vector store. Best-effort:
+ * failures are logged + flagged but never fail local indexing. Replaces any
+ * previously-uploaded file so reindex/replace doesn't accumulate stale files.
+ */
+async function syncDocToOpenAI(doc: KbDocRow, rawText: string): Promise<void> {
+  if (!integrations.openaiDocsEnabled) return;
+  try {
+    if (doc.openai_file_id) {
+      const vsId = getVectorStoreId();
+      if (vsId) await removeFileFromVectorStore(vsId, doc.openai_file_id);
+      await deleteOpenAIFile(doc.openai_file_id);
+    }
+
+    const stem = safeFileStem(doc.title);
+    const isPdf = doc.source_type === 'pdf' && !!doc.file_path && fs.existsSync(doc.file_path);
+    // Non-PDF with no extractable text → nothing useful to upload.
+    if (!isPdf && !rawText.trim()) {
+      db.prepare(`UPDATE kb_documents SET openai_file_id=NULL, openai_file_status=NULL WHERE id=?`).run(doc.id);
+      return;
+    }
+    const fileId = isPdf
+      ? await uploadOpenAIFile({ path: doc.file_path as string }, `${stem}.pdf`)
+      : await uploadOpenAIFile({ buffer: Buffer.from(rawText, 'utf8') }, `${stem}.txt`);
+
+    const vsId = await ensureVectorStore();
+    await addFileToVectorStore(vsId, fileId);
+
+    db.prepare(
+      `UPDATE kb_documents SET openai_file_id=?, openai_file_status='uploaded', updated_at=? WHERE id=?`,
+    ).run(fileId, now(), doc.id);
+    logger.info({ documentId: doc.id, fileId }, 'kb index: uploaded to OpenAI doc engine');
+  } catch (err) {
+    db.prepare(`UPDATE kb_documents SET openai_file_status='failed', updated_at=? WHERE id=?`).run(
+      now(),
+      doc.id,
+    );
+    logger.error({ err, documentId: doc.id }, 'kb index: OpenAI doc engine upload failed');
+  }
+}
+
 /**
  * Full ingestion for one KB document: extract → chunk → embed → replace chunks
  * → mark indexed. On any failure the document is flagged 'failed' with the error.
@@ -169,7 +228,7 @@ export async function indexDocument(documentId: string): Promise<void> {
   const doc = db
     .prepare(
       `SELECT id, title, description, source_type, file_path, file_mime, source_url,
-              course, cap_year, language, topic
+              course, cap_year, language, topic, openai_file_id
          FROM kb_documents WHERE id = ? AND deleted_at IS NULL`,
     )
     .get(documentId) as KbDocRow | undefined;
@@ -196,6 +255,9 @@ export async function indexDocument(documentId: string): Promise<void> {
            indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
       ).run(now(), currentEmbeddingModel(), now(), documentId);
       rebuildVectorCache();
+      // Nothing extractable locally, but still let the OpenAI engine parse the
+      // original file (its PDF/table parser may recover content ours could not).
+      await syncDocToOpenAI(doc, raw);
       logger.info({ documentId }, 'kb index: no extractable text; indexed empty');
       return;
     }
@@ -238,6 +300,8 @@ export async function indexDocument(documentId: string): Promise<void> {
     writeAll();
 
     rebuildVectorCache();
+    // Mirror the document into the OpenAI document engine (best-effort).
+    await syncDocToOpenAI(doc, raw);
     logger.info({ documentId, chunks: bodies.length }, 'kb index: indexed');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

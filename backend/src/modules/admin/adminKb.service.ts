@@ -5,7 +5,48 @@ import { db } from '../../db/connection';
 import { newId } from '../../lib/ids';
 import { now } from '../../lib/time';
 import { Errors } from '../../lib/errors';
+import { logger } from '../../lib/logger';
+import { integrations } from '../../config/env';
+import {
+  ensureVectorStore,
+  getVectorStoreId,
+  addFileToVectorStore,
+  removeFileFromVectorStore,
+  deleteOpenAIFile,
+} from '../../services/openai';
 import { STORAGE_DIRS } from '../../middleware/upload';
+
+/** Best-effort: keep the shared vector store's membership in sync with active state. */
+function syncVectorStoreMembership(fileId: string | null | undefined, active: boolean): void {
+  if (!integrations.openaiDocsEnabled || !fileId) return;
+  void (async () => {
+    try {
+      if (active) {
+        const vs = await ensureVectorStore();
+        await addFileToVectorStore(vs, fileId);
+      } else {
+        const vs = getVectorStoreId();
+        if (vs) await removeFileFromVectorStore(vs, fileId);
+      }
+    } catch (err) {
+      logger.warn({ err, fileId }, 'vector store membership sync failed');
+    }
+  })();
+}
+
+/** Best-effort: detach + delete the OpenAI file when a document is removed. */
+function purgeOpenAIFile(fileId: string | null | undefined): void {
+  if (!integrations.openaiDocsEnabled || !fileId) return;
+  void (async () => {
+    try {
+      const vs = getVectorStoreId();
+      if (vs) await removeFileFromVectorStore(vs, fileId);
+      await deleteOpenAIFile(fileId);
+    } catch (err) {
+      logger.warn({ err, fileId }, 'openai file purge failed');
+    }
+  })();
+}
 
 export interface KbDocumentDTO {
   id: string;
@@ -25,6 +66,7 @@ export interface KbDocumentDTO {
   indexError: string | null;
   chunkCount: number;
   embeddingModel: string | null;
+  openaiFileStatus: string | null;
   indexedAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -50,6 +92,7 @@ export function mapKbDocument(r: any): KbDocumentDTO {
     indexError: r.index_error ?? null,
     chunkCount: r.chunk_count ?? 0,
     embeddingModel: r.embedding_model ?? null,
+    openaiFileStatus: r.openai_file_status ?? null,
     indexedAt: r.indexed_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -292,21 +335,27 @@ export function replaceFile(
 
 export function setActive(id: string, isActive: boolean): KbDocumentDTO {
   getDocumentOrThrow(id);
+  const row = getDocumentRow(id);
   db.prepare('UPDATE kb_documents SET is_active=?, updated_at=? WHERE id=?').run(isActive ? 1 : 0, now(), id);
   // Keep chunk activity in sync so the vector cache reflects the toggle.
   db.prepare('UPDATE kb_chunks SET is_active=? WHERE document_id=?').run(isActive ? 1 : 0, id);
+  // Mirror the toggle in the OpenAI vector store (best-effort, async).
+  syncVectorStoreMembership(row?.openai_file_id, isActive);
   return getDocumentOrThrow(id);
 }
 
-/** Soft-delete: flag deleted, deactivate, and remove chunks. */
+/** Soft-delete: flag deleted, deactivate, remove chunks, and purge the OpenAI file. */
 export function softDelete(id: string): void {
   getDocumentOrThrow(id);
+  const row = getDocumentRow(id);
+  const fileId = row?.openai_file_id as string | null | undefined;
   const ts = now();
   const tx = db.transaction(() => {
-    db.prepare('UPDATE kb_documents SET deleted_at=?, is_active=0, updated_at=? WHERE id=?').run(ts, ts, id);
+    db.prepare('UPDATE kb_documents SET deleted_at=?, is_active=0, openai_file_id=NULL, openai_file_status=NULL, updated_at=? WHERE id=?').run(ts, ts, id);
     db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(id);
   });
   tx();
+  purgeOpenAIFile(fileId);
 }
 
 export interface JobRowDTO {

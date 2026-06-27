@@ -229,6 +229,10 @@ CREATE TABLE IF NOT EXISTS kb_documents (
   index_error     TEXT,
   chunk_count     INTEGER NOT NULL DEFAULT 0,
   embedding_model TEXT,
+  -- OpenAI document-understanding engine: the uploaded file's id at OpenAI and
+  -- its ingest status ('uploaded' once attached to the shared vector store).
+  openai_file_id  TEXT,
+  openai_file_status TEXT,
   uploaded_by     TEXT REFERENCES admin_users(id) ON DELETE SET NULL,
   indexed_at      INTEGER,
   created_at      INTEGER NOT NULL,

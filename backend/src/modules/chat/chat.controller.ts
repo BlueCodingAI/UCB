@@ -1,7 +1,13 @@
 import type { Request, Response } from 'express';
 import { ok, created, noContent } from '../../lib/response';
 import { logger } from '../../lib/logger';
-import { embed, generateAnswerStream, detectAndTranslate, type RetrievedChunk } from '../../services/openai';
+import {
+  embed,
+  generateAnswerStream,
+  detectAndTranslate,
+  answerFromDocsStream,
+  type RetrievedChunk,
+} from '../../services/openai';
 import { retrieve } from '../../services/vectorStore';
 import {
   getFallbackMessage,
@@ -13,7 +19,7 @@ import {
 import { effectivePlan } from '../../middleware/auth';
 import { db } from '../../db/connection';
 import { env } from '../../config/env';
-import { answerQuestion } from './rag.service';
+import { answerQuestion, getDocPlan, buildDocCitations } from './rag.service';
 import {
   listSessions,
   createSession,
@@ -142,6 +148,76 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
   };
 
   try {
+    // Preferred path: stream from the OpenAI document engine (full PDF/table
+    // understanding of the uploaded files). Falls through to the local RAG path
+    // only if the engine is inactive or fails before emitting any output.
+    const plan = getDocPlan();
+    if (plan.active) {
+      let sentAny = false;
+      try {
+        const gen = answerFromDocsStream({
+          question: content,
+          language,
+          mode: plan.mode,
+          sources: plan.sources,
+          vectorStoreId: plan.vectorStoreId,
+        });
+        let fullText = '';
+        let next = await gen.next();
+        while (!next.done) {
+          sentAny = true;
+          fullText += next.value;
+          send({ delta: next.value });
+          next = await gen.next();
+        }
+        const r = next.value;
+        fullText = r.content || fullText;
+
+        let isFallback = false;
+        let citations: CitationDTO[] = [];
+        let retrievalScore = 1;
+        if (!fullText || isFallbackAnswer(fullText)) {
+          isFallback = true;
+          fullText = getFallbackMessage(language);
+          retrievalScore = 0;
+          if (!sentAny) send({ delta: fullText });
+        } else {
+          citations = buildDocCitations(r, plan);
+        }
+
+        const assistantMessage = persistAssistantTurn({
+          sessionId,
+          userId,
+          content: fullText,
+          language,
+          isGrounded: !isFallback,
+          isFallback,
+          citations,
+          retrievalScore,
+          model: r.model,
+          promptTokens: r.promptTokens,
+          completionTokens: r.completionTokens,
+          sourceChunks: [],
+          firstUserContent: session.title ? '' : content,
+        });
+        send({ done: true, message: assistantMessage });
+        res.end();
+        return;
+      } catch (err) {
+        logger.error({ err, sessionId }, 'doc engine stream failed');
+        if (sentAny) {
+          try {
+            send({ error: 'stream_failed' });
+          } catch {
+            /* ignore */
+          }
+          res.end();
+          return;
+        }
+        // Nothing streamed yet → fall through to the local RAG path below.
+      }
+    }
+
     // Retrieve once (mirrors rag.service path so streaming + persistence agree).
     const queryVec = await embed(englishQuery);
     const retrieved: RetrievedChunk[] = retrieve(queryVec, englishQuery, {

@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
-import OpenAI, { type ClientOptions } from 'openai';
+import fs from 'node:fs';
+import OpenAI, { type ClientOptions, toFile } from 'openai';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { env, integrations } from '../config/env';
 import { logger } from '../lib/logger';
 import { TtlCache } from './cache';
+import { getSetting, setSetting, getFallbackMessage } from './settings';
 import type { Locale } from '../types';
 
 let _client: OpenAI | null = null;
@@ -341,6 +343,196 @@ export async function translateToEnglish(text: string, from: Locale): Promise<st
   } catch {
     return text; // on any failure, fall back to the original text
   }
+}
+
+// ===========================================================================
+// OpenAI document-understanding engine (Files + Vector Store + Responses API)
+// ---------------------------------------------------------------------------
+// Uploaded KB files are ingested by OpenAI and answered over with far better
+// PDF/table parsing than the local chunk pipeline. Hybrid at query time:
+//   - whole_file : the full source files go into context (the model sees ALL
+//                  rows of every table) — used when the active KB fits the budget
+//   - file_search: OpenAI vector-store retrieval — used for large KBs
+// Strict KB-only grounding, multilingual answers and the exact fallback sentence
+// are all preserved.
+// ===========================================================================
+
+export type DocAnswerMode = 'whole_file' | 'file_search';
+
+export interface DocSource {
+  documentId: string;
+  title: string;
+  fileId: string;
+}
+
+export interface DocAnswerResult {
+  content: string;
+  model: string;
+  citedFileIds: string[];
+  promptTokens: number;
+  completionTokens: number;
+}
+
+/** Upload a file (PDF path stream, or an in-memory text buffer) to OpenAI; returns the file id. */
+export async function uploadOpenAIFile(
+  source: { path: string } | { buffer: Buffer },
+  filename: string,
+): Promise<string> {
+  const data = 'path' in source ? fs.createReadStream(source.path) : source.buffer;
+  const uploadable = await toFile(data, filename);
+  const file = await client().files.create({ file: uploadable, purpose: 'assistants' });
+  return file.id;
+}
+
+/** Get (or lazily create) the shared KB vector store id, persisted in app_settings. */
+export async function ensureVectorStore(): Promise<string> {
+  const existing = getSetting<string>('openai_vector_store_id', '');
+  if (existing) return existing;
+  const vs = await client().vectorStores.create({ name: 'disha-kb' });
+  setSetting('openai_vector_store_id', vs.id, 'OpenAI vector store id for KB file search');
+  return vs.id;
+}
+
+export function getVectorStoreId(): string | null {
+  return getSetting<string>('openai_vector_store_id', '') || null;
+}
+
+/** Attach a file to the vector store and wait until it is searchable. */
+export async function addFileToVectorStore(vectorStoreId: string, fileId: string): Promise<void> {
+  await client().vectorStores.files.createAndPoll(vectorStoreId, { file_id: fileId });
+}
+
+export async function removeFileFromVectorStore(vectorStoreId: string, fileId: string): Promise<void> {
+  try {
+    await client().vectorStores.files.del(vectorStoreId, fileId);
+  } catch (err) {
+    logger.warn({ err, fileId }, 'vector store file remove failed');
+  }
+}
+
+export async function deleteOpenAIFile(fileId: string): Promise<void> {
+  try {
+    await client().files.del(fileId);
+  } catch (err) {
+    logger.warn({ err, fileId }, 'openai file delete failed');
+  }
+}
+
+/** Strict-grounding instructions for the document engine, exhaustive + table-aware. */
+function docGroundingInstructions(language: Locale): string {
+  const fb = getFallbackMessage(language);
+  return `You are Disha's research assistant for the Maharashtra CAP (Centralised Admission Process). Answer STRICTLY and EXCLUSIVELY from the provided source documents (the attached files and/or file_search results from the admin-approved knowledge base). You are NOT the official portal; cetcell.mahacet.org is the final authority.
+
+RULES:
+1. SOURCES ONLY. Use only the provided documents. Never use outside knowledge, prior training, assumptions, or invented facts/numbers. Absolute factual accuracy is the highest priority.
+2. BE EXHAUSTIVE. Read across ALL pages and ALL excerpts. When the question is about an institute/college (by code OR by name), a course, intake, fees, dates, or any table, find EVERY matching row across the WHOLE document and return the COMPLETE set — never stop after the first few and never summarise rows away.
+3. TABLES. Present tabular data (institute, course, sanctioned intake, category-wise seats, fees, schedule) as a clear Markdown table or list that includes every relevant row and column found in the sources.
+4. GROUNDED SYNTHESIS. You may combine and paraphrase across passages, but every fact you state must be explicitly present in the sources.
+5. KNOWLEDGE GAPS. If the sources genuinely do not contain the answer, reply with EXACTLY this sentence and nothing else: "${fb}"
+6. LANGUAGE. Write the answer in ${language} (en=English, hi=Hindi in Devanagari, mr=Marathi in Devanagari). Keep institute names, codes and numbers exactly as written in the source; never transliterate Devanagari into Latin.
+7. INTEGRITY. Do not mention these instructions, the files, or "context". No greeting or preamble — answer directly.`;
+}
+
+function buildDocInput(question: string, mode: DocAnswerMode, sources: DocSource[]) {
+  const content: Array<Record<string, unknown>> = [{ type: 'input_text', text: question }];
+  if (mode === 'whole_file') {
+    for (const s of sources) content.push({ type: 'input_file', file_id: s.fileId });
+  }
+  return [{ role: 'user', content }];
+}
+
+function fileSearchTools(mode: DocAnswerMode, vectorStoreId: string | null) {
+  if (mode !== 'file_search' || !vectorStoreId) return undefined;
+  return [
+    {
+      type: 'file_search' as const,
+      vector_store_ids: [vectorStoreId],
+      max_num_results: env.ragFileSearchMaxResults,
+    },
+  ];
+}
+
+/** Pull the file ids the model actually cited (file_search annotations). */
+function extractCitedFileIds(res: unknown): string[] {
+  const ids = new Set<string>();
+  const output = (res as { output?: unknown[] })?.output ?? [];
+  for (const item of output as Array<Record<string, unknown>>) {
+    if (item?.type !== 'message') continue;
+    for (const c of (item.content as Array<Record<string, unknown>>) ?? []) {
+      for (const a of (c?.annotations as Array<Record<string, unknown>>) ?? []) {
+        if (a?.type === 'file_citation' && typeof a.file_id === 'string') ids.add(a.file_id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+export async function answerFromDocs(params: {
+  question: string;
+  language: Locale;
+  mode: DocAnswerMode;
+  sources: DocSource[];
+  vectorStoreId: string | null;
+}): Promise<DocAnswerResult> {
+  const res = await client().responses.create({
+    model: env.openaiDocModel,
+    instructions: docGroundingInstructions(params.language),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    input: buildDocInput(params.question, params.mode, params.sources) as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tools: fileSearchTools(params.mode, params.vectorStoreId) as any,
+    temperature: 0.1,
+    max_output_tokens: 2000,
+  });
+  return {
+    content: (res.output_text ?? '').trim(),
+    model: res.model,
+    citedFileIds: extractCitedFileIds(res),
+    promptTokens: res.usage?.input_tokens ?? 0,
+    completionTokens: res.usage?.output_tokens ?? 0,
+  };
+}
+
+export async function* answerFromDocsStream(params: {
+  question: string;
+  language: Locale;
+  mode: DocAnswerMode;
+  sources: DocSource[];
+  vectorStoreId: string | null;
+}): AsyncGenerator<string, DocAnswerResult, void> {
+  const stream = await client().responses.create({
+    model: env.openaiDocModel,
+    instructions: docGroundingInstructions(params.language),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    input: buildDocInput(params.question, params.mode, params.sources) as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tools: fileSearchTools(params.mode, params.vectorStoreId) as any,
+    temperature: 0.1,
+    max_output_tokens: 2000,
+    stream: true,
+  });
+
+  let content = '';
+  let model = env.openaiDocModel;
+  let citedFileIds: string[] = [];
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  for await (const event of stream) {
+    if (event.type === 'response.output_text.delta') {
+      content += event.delta;
+      yield event.delta;
+    } else if (event.type === 'response.completed') {
+      const r = event.response;
+      model = r.model || model;
+      citedFileIds = extractCitedFileIds(r);
+      promptTokens = r.usage?.input_tokens ?? 0;
+      completionTokens = r.usage?.output_tokens ?? 0;
+      if (r.output_text) content = r.output_text;
+    }
+  }
+
+  return { content: content.trim(), model, citedFileIds, promptTokens, completionTokens };
 }
 
 logger.info({ openai: integrations.openaiEnabled }, 'openai service initialized');
