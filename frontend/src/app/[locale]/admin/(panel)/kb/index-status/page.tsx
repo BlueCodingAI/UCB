@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, Search, AlertTriangle, FlaskConical } from 'lucide-react';
+import { Activity, Search, AlertTriangle, FlaskConical, RefreshCw } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { formatRelative } from '@/lib/format';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
@@ -51,16 +51,41 @@ export default function AdminKbIndexStatusPage() {
   const [jobsErr, setJobsErr] = useState<string | null>(null);
   const [fallbacks, setFallbacks] = useState<FallbackLog[] | null>(null);
   const [fallbacksErr, setFallbacksErr] = useState<string | null>(null);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexMsg, setReindexMsg] = useState<string | null>(null);
+
+  async function loadJobs() {
+    try {
+      const d = await api.get<IndexJob[]>('/admin/kb/jobs', { realm: 'admin' });
+      setJobs(d);
+    } catch (err) {
+      setJobsErr(err instanceof ApiError ? err.message : 'Failed to load jobs.');
+    }
+  }
+
+  async function reindexAll() {
+    if (!window.confirm('Re-index the entire knowledge base? This re-embeds every document and may take a few minutes.')) {
+      return;
+    }
+    setReindexing(true);
+    setReindexMsg(null);
+    try {
+      const res = await api.post<{ documents: number; jobs: number }>(
+        '/admin/kb/documents/reindex-all',
+        {},
+        { realm: 'admin' },
+      );
+      setReindexMsg(`Queued re-indexing for ${res.documents} document(s).`);
+      await loadJobs();
+    } catch (err) {
+      setReindexMsg(err instanceof ApiError ? err.message : 'Re-index request failed.');
+    } finally {
+      setReindexing(false);
+    }
+  }
 
   useEffect(() => {
-    (async () => {
-      try {
-        const d = await api.get<IndexJob[]>('/admin/kb/jobs', { realm: 'admin' });
-        setJobs(d);
-      } catch (err) {
-        setJobsErr(err instanceof ApiError ? err.message : 'Failed to load jobs.');
-      }
-    })();
+    loadJobs();
     (async () => {
       try {
         const d = await api.get<FallbackLog[]>('/admin/chat-logs', {
@@ -79,7 +104,19 @@ export default function AdminKbIndexStatusPage() {
       <AdminPageHeader
         title="Indexing & RAG"
         description="Monitor index jobs, find knowledge gaps, and test retrieval."
+        actions={
+          <Button variant="secondary" onClick={reindexAll} loading={reindexing}>
+            <RefreshCw className="mr-1.5 h-4 w-4" />
+            Re-index all
+          </Button>
+        }
       />
+
+      {reindexMsg && (
+        <div role="status" className="mb-4 rounded-sm border border-primary-600/30 bg-primary-50 px-3.5 py-2.5 text-sm text-primary-700">
+          {reindexMsg}
+        </div>
+      )}
 
       <SearchTest />
 
@@ -250,7 +287,7 @@ function SearchTest() {
                         {i + 1}. {h.documentTitle}
                         {h.sourceLocator ? ` · ${h.sourceLocator}` : ''}
                       </span>
-                      <Badge tone={h.score >= 0.5 ? 'success' : h.score >= 0.3 ? 'neutral' : 'danger'}>
+                      <Badge tone={h.score >= 0.4 ? 'success' : h.score >= 0.2 ? 'neutral' : 'danger'}>
                         {h.score.toFixed(3)}
                       </Badge>
                     </div>

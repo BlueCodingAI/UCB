@@ -6,7 +6,8 @@ import { writeAudit } from '../../middleware/audit';
 import { enqueue } from '../../services/jobs';
 import { embed } from '../../services/openai';
 import { retrieve, rebuildVectorCache } from '../../services/vectorStore';
-import { getRagTopK, getRagMinScore } from '../../services/settings';
+import { getRagTopK, getRagMinScore, getSetting } from '../../services/settings';
+import { env } from '../../config/env';
 import type { Locale } from '../../types';
 import {
   createDocument,
@@ -18,6 +19,7 @@ import {
   setActive,
   softDelete,
   listKbJobs,
+  listAllDocumentIds,
 } from './adminKb.service';
 
 /** Wrap an async controller so thrown errors reach the central error handler. */
@@ -181,6 +183,22 @@ export const reindexDoc: RequestHandler = (req, res) => {
   ok(res, { document: doc, jobId, indexing: 'queued' });
 };
 
+/** POST /documents/reindex-all — re-index every document (re-embed the whole KB). */
+export const reindexAll: RequestHandler = (req, res) => {
+  const ids = listAllDocumentIds();
+  const jobIds = ids.map((id) => enqueue('kb_reindex', { documentId: id }));
+  writeAudit({
+    actorType: 'admin',
+    actorId: adminId(req),
+    action: 'kb.document.reindex_all',
+    entityType: 'kb_document',
+    entityId: null,
+    after: { documents: ids.length, jobs: jobIds.length },
+    req,
+  });
+  ok(res, { documents: ids.length, jobs: jobIds.length, indexing: 'queued' });
+};
+
 /** DELETE /documents/:id — soft delete, drop chunks, rebuild cache. */
 export const deleteDoc: RequestHandler = (req, res) => {
   const before = getDocumentOrThrow(req.params.id);
@@ -202,8 +220,12 @@ export const deleteDoc: RequestHandler = (req, res) => {
 export const searchTest = asyncHandler(async (req, res) => {
   const { query, language } = req.body as { query: string; language: Locale };
   const queryVec = await embed(query);
+  // Mirror the live chat retrieval options so admins see exactly what users get
+  // (course is not scoped in the admin tool; cap_year is a soft preference, not a gate).
   const chunks = retrieve(queryVec, query, {
     language,
+    course: null,
+    capYear: getSetting<number>('current_cap_year', env.currentCapYear),
     topK: getRagTopK(),
     minScore: getRagMinScore(),
   });

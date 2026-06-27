@@ -17,6 +17,7 @@ import {
   replaceDocFile,
   toggleActive,
   reindexDoc,
+  reindexAll,
   deleteDoc,
   searchTest,
   listJobs,
@@ -31,6 +32,8 @@ const router = Router();
 router.use(requireRole('admin', 'kb_manager'));
 
 router.post('/documents', kbUpload.single('file'), validate({ body: createDocumentSchema }), createDoc);
+// Bulk re-index — must precede the ':id' routes so it isn't captured as an id.
+router.post('/documents/reindex-all', reindexAll);
 router.get('/documents', listDocs);
 router.get('/documents/:id', validate({ params: idParamSchema }), getDoc);
 router.put('/documents/:id', validate({ params: idParamSchema, body: updateDocumentSchema }), updateDoc);

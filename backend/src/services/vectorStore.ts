@@ -123,22 +123,27 @@ export function retrieve(queryVec: Float32Array, queryText: string, opts: Retrie
   ensureLoaded();
   const fts = ftsScores(queryText);
 
-  const candidates = cache.filter((c) => {
-    // Cross-lingual retrieval: do NOT restrict by language. The KB is primarily
-    // English and OpenAI embeddings are multilingual, so a Hindi/Marathi question
-    // matches the English passages. The answer is then written in the user's
-    // selected language by the grounding prompt. (opts.language is kept for the
-    // answer side / future use, but is intentionally not a retrieval filter.)
-    if (opts.course && c.course && c.course !== opts.course) return false;
-    if (opts.capYear && c.capYear && c.capYear !== opts.capYear) return false;
-    return true;
-  });
-
-  const scored = candidates.map((c) => {
+  // No HARD metadata gating. The KB is small and admin-curated, so a course or
+  // CAP-year mismatch must NEVER silently drop a chunk — that previously caused
+  // permanent fallbacks (e.g. a "2025-26" brochure tagged cap_year=2025 vanished
+  // entirely under current_cap_year=2026, so the bot answered "not in knowledge
+  // base" for everything). Instead every active chunk stays a candidate and we
+  // apply a gentle ranking penalty for mismatches, so the right-year / right-course
+  // content still floats to the top WHEN it exists, without hiding the rest.
+  // Language is intentionally not filtered either: the KB is primarily English and
+  // OpenAI embeddings are multilingual, so a Hindi/Marathi question (normalised to
+  // English upstream) matches the English passages; the answer is then written in
+  // the user's language by the grounding prompt.
+  const scored = cache.map((c) => {
     const cos = dot(queryVec, c.vec); // unit vectors → cosine
     const kw = fts.get(c.rowid) ?? 0;
-    // Weighted hybrid: semantic dominant, keyword as a recall boost.
-    const score = 0.75 * cos + 0.25 * kw;
+    // Weighted hybrid: semantic-led, keyword as a strong precision boost. Tuned
+    // for text-embedding-3-small, whose relevant cosines sit ~0.30–0.55.
+    let score = 0.6 * cos + 0.4 * kw;
+    // Soft preferences (ranking only, never exclusion): de-prioritise off-course
+    // and off-cycle chunks so current-year / on-course material wins ties.
+    if (opts.course && c.course && c.course !== opts.course) score *= 0.9;
+    if (opts.capYear && c.capYear && c.capYear !== opts.capYear) score *= 0.9;
     return { c, score };
   });
 

@@ -321,6 +321,18 @@ export interface JobRowDTO {
   updatedAt: number;
 }
 
+/**
+ * IDs of every non-deleted KB document, oldest first — used to re-index the whole
+ * corpus (e.g. after an embedding-format change or a new CAP cycle). Returns the
+ * list so the caller can enqueue one re-index job per document.
+ */
+export function listAllDocumentIds(): string[] {
+  const rows = db
+    .prepare('SELECT id FROM kb_documents WHERE deleted_at IS NULL ORDER BY created_at ASC')
+    .all() as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
 export function listKbJobs(limit = 50): JobRowDTO[] {
   const rows = db
     .prepare(

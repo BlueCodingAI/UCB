@@ -1,6 +1,7 @@
 import { db } from '../db/connection';
 import { now } from '../lib/time';
 import { env } from '../config/env';
+import { logger } from '../lib/logger';
 import type { Locale } from '../types';
 
 /** Read a JSON app_setting by key, with a typed fallback. */
@@ -45,13 +46,42 @@ export function getRagMinScore(): number {
   return getSetting('rag_min_score', env.ragMinScore);
 }
 
-/** True if an LLM answer is (effectively) the KB-miss fallback in any language. */
+/**
+ * One-time reconciliation of the DB-persisted RAG tuning so improved defaults
+ * reach EXISTING databases (getRagMinScore/getRagTopK read app_settings first,
+ * so changing env defaults alone would not affect a system that has already been
+ * seeded). Versioned + idempotent: it applies once, then leaves admin overrides
+ * untouched forever after. Called on boot.
+ */
+export function reconcileRagDefaults(): void {
+  const VERSION_KEY = 'rag_tuning_version';
+  const TARGET = 2;
+  if (getSetting<number>(VERSION_KEY, 0) >= TARGET) return;
+  setSetting('rag_min_score', env.ragMinScore, 'Minimum hybrid relevance score');
+  setSetting('rag_top_k', env.ragTopK, 'Top-K chunks for retrieval');
+  setSetting(VERSION_KEY, TARGET, 'RAG tuning defaults version (auto-applied on boot)');
+  logger.info(
+    { ragMinScore: env.ragMinScore, ragTopK: env.ragTopK },
+    'rag tuning defaults reconciled',
+  );
+}
+
+/**
+ * True only when an LLM reply IS (essentially) the KB-miss fallback sentence —
+ * i.e. the model declined for lack of context. We must NOT misclassify a real,
+ * grounded answer that merely *mentions* something is missing (the old 28-char
+ * prefix check did exactly that and silently discarded good answers). So we match
+ * the fallback verbatim, or a reply that is just the fallback plus trivial trailing
+ * text (length guard); a substantive answer always passes through.
+ */
 export function isFallbackAnswer(content: string): boolean {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
   const c = norm(content);
   if (!c) return true;
   return (['en', 'hi', 'mr'] as Locale[]).some((l) => {
     const fb = norm(getFallbackMessage(l));
-    return c === fb || c.startsWith(fb.slice(0, 28));
+    if (!fb) return false;
+    if (c === fb) return true;
+    return c.startsWith(fb) && c.length <= Math.ceil(fb.length * 1.15);
   });
 }

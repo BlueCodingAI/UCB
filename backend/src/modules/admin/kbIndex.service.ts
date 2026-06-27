@@ -25,7 +25,7 @@ interface KbDocRow {
 }
 
 const TARGET_CHARS = 2000; // ~500 tokens
-const OVERLAP_CHARS = Math.round(TARGET_CHARS * 0.15); // ~15% overlap
+const OVERLAP_CHARS = Math.round(TARGET_CHARS * 0.25); // ~25% overlap — carries list/table rows across chunk boundaries
 const MAX_CHARS = TARGET_CHARS; // never exceed a chunk body of this size
 
 /** Rough token estimate (~4 chars/token) for storing token_count. */
@@ -46,12 +46,14 @@ function splitOversizedParagraph(para: string): string[] {
   let buf = '';
   for (const s of sentences) {
     if (s.length > MAX_CHARS) {
-      // A single sentence bigger than the budget: hard-slice it.
+      // A single sentence bigger than the budget: keep it whole and let chunkText
+      // truncate at the boundary. Avoids splitting mid-clause (which mangles dense
+      // eligibility/fee lines) for the rare oversized "sentence".
       if (buf) {
         out.push(buf);
         buf = '';
       }
-      for (let i = 0; i < s.length; i += MAX_CHARS) out.push(s.slice(i, i + MAX_CHARS));
+      out.push(s);
       continue;
     }
     if (buf && buf.length + 1 + s.length > MAX_CHARS) {
@@ -198,10 +200,13 @@ export async function indexDocument(documentId: string): Promise<void> {
       return;
     }
 
-    const header = `[Source: ${doc.title} | topic: ${doc.topic ?? ''} | lang: ${doc.language}]`;
-    const texts = bodies.map((b) => `${header}\n${b}`);
-
-    const vectors = await embedBatch(texts);
+    // Embed the chunk body ONLY. The query is embedded clean, so prepending a
+    // synthetic "[Source: …]" header here created a train/serve mismatch that
+    // diluted cosine similarity and pushed genuinely relevant matches below the
+    // score floor. The document title is still surfaced to the model at answer
+    // time (buildContext adds it from the kb_documents join), so no source
+    // context is lost — and the prompt context is no longer redundantly headed.
+    const vectors = await embedBatch(bodies);
 
     const ts = now();
     const writeAll = db.transaction(() => {
@@ -212,8 +217,8 @@ export async function indexDocument(documentId: string): Promise<void> {
           newId(),
           documentId,
           i,
-          texts[i],
-          estimateTokens(texts[i]),
+          bodies[i],
+          estimateTokens(bodies[i]),
           doc.language,
           doc.course,
           doc.cap_year,

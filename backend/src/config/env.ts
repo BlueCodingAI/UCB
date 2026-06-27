@@ -94,9 +94,14 @@ export const env = {
   adminBootstrapPassword: str('ADMIN_BOOTSTRAP_PASSWORD', 'Admin@12345'),
   adminBootstrapName: str('ADMIN_BOOTSTRAP_NAME', 'Disha Admin'),
 
-  // RAG tuning (also stored in app_settings, editable in admin)
-  ragTopK: num('RAG_TOP_K', 6),
-  ragMinScore: num('RAG_MIN_SCORE', 0.3),
+  // RAG tuning (also stored in app_settings, editable in admin).
+  // ragMinScore is the floor on the hybrid score (0.6*cosine + 0.4*keyword).
+  // 0.2 is intentionally permissive for text-embedding-3-small (relevant cosines
+  // are often only 0.30–0.45); the strict GROUNDING_PROMPT + exact-fallback gate
+  // are the real backstop against off-topic context, so a low floor maximises
+  // recall (finds info that IS in the KB) without weakening KB-only grounding.
+  ragTopK: num('RAG_TOP_K', 8),
+  ragMinScore: num('RAG_MIN_SCORE', 0.2),
 
   // Ops
   seasonMode: bool('SEASON_MODE', false),
