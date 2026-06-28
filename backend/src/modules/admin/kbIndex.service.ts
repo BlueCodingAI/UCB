@@ -34,11 +34,7 @@ function safeFileStem(title: string): string {
   return (s || 'document').slice(0, 80);
 }
 
-async function syncDocToOpenAI(
-  doc: KbDocMeta,
-  rawText: string,
-  prepared?: Array<{ body: string }>,
-): Promise<void> {
+async function syncDocToOpenAI(doc: KbDocMeta, rawText: string): Promise<void> {
   if (!integrations.openaiDocsEnabled) return;
   try {
     if (doc.openai_file_id) {
@@ -49,27 +45,19 @@ async function syncDocToOpenAI(
 
     const stem = safeFileStem(doc.title);
     const isPdf = doc.source_type === 'pdf' && !!doc.file_path && fs.existsSync(doc.file_path);
-    const capStructured =
-      prepared?.length && prepared[0]?.body.startsWith('CAP Seat Matrix Record')
-        ? prepared.map((p) => p.body).join('\n\n---\n\n')
-        : null;
 
-    if (!isPdf && !rawText.trim() && !capStructured) {
+    if (!isPdf && !rawText.trim()) {
       db.prepare(`UPDATE kb_documents SET openai_file_id=NULL, openai_file_status=NULL WHERE id=?`).run(doc.id);
       return;
     }
 
-    const fileId = capStructured
-      ? await uploadOpenAIFile(
-          { buffer: Buffer.from(capStructured, 'utf8') },
-          `${stem}_cap_matrix.txt`,
-        )
-      : isPdf
-        ? await uploadOpenAIFile({ path: doc.file_path as string }, `${stem}.pdf`)
-        : await uploadOpenAIFile(
-            { buffer: Buffer.from(rawText, 'utf8') },
-            `${stem}.txt`,
-          );
+    // Always upload original PDF to OpenAI — the model parses tables natively.
+    const fileId = isPdf
+      ? await uploadOpenAIFile({ path: doc.file_path as string }, `${stem}.pdf`)
+      : await uploadOpenAIFile(
+          { buffer: Buffer.from(rawText, 'utf8') },
+          `${stem}.txt`,
+        );
 
     const vsId = await ensureVectorStore();
     await addFileToVectorStore(vsId, fileId);
@@ -117,7 +105,7 @@ export async function indexDocument(documentId: string): Promise<void> {
            indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
       ).run(now(), currentEmbeddingModel(), now(), documentId);
       rebuildVectorCache();
-      await syncDocToOpenAI(doc, raw, prepared);
+      await syncDocToOpenAI(doc, raw);
       logger.info({ documentId }, 'kb index: no extractable text; indexed empty');
       return;
     }
@@ -155,7 +143,7 @@ export async function indexDocument(documentId: string): Promise<void> {
     writeAll();
 
     rebuildVectorCache();
-    await syncDocToOpenAI(doc, raw, prepared);
+    await syncDocToOpenAI(doc, raw);
     logger.info({ documentId, chunks: prepared.length, chars: raw.length }, 'kb index: indexed');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -64,6 +64,9 @@ export const env = {
   // context (the model sees ALL info, incl. complete tables); otherwise we use
   // file_search retrieval. Falls back to the local SQLite RAG when disabled / no key.
   openaiFileSearchEnabled: bool('OPENAI_FILE_SEARCH', true),
+  // When true (default), chat/voice answers use ONLY OpenAI's PDF file understanding
+  // (Responses API + attached PDFs / file_search). Local SQLite RAG is skipped.
+  openaiPdfOnly: bool('OPENAI_PDF_ONLY', true),
   openaiDocModel: str('OPENAI_DOC_MODEL', 'gpt-4o'),
   // ~70K tokens of source (≈4 chars/token) — well within gpt-4o's 128K context,
   // leaving room for the prompt + a long table answer.
@@ -125,6 +128,8 @@ export const integrations = {
   openaiEnabled: Boolean(env.openaiApiKey),
   // OpenAI document-understanding engine is usable only with a key + the flag on.
   openaiDocsEnabled: Boolean(env.openaiApiKey) && env.openaiFileSearchEnabled,
+  /** Chat uses OpenAI PDF engine only — no local vector RAG. */
+  openaiPdfOnly: Boolean(env.openaiApiKey) && env.openaiFileSearchEnabled && env.openaiPdfOnly,
   sarvamEnabled: Boolean(env.sarvamApiKey),
   razorpayEnabled: Boolean(env.razorpayKeyId && env.razorpayKeySecret),
   emailEnabled: Boolean(env.smtpHost && env.smtpUser),

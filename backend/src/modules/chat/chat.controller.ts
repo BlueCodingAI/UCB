@@ -10,12 +10,14 @@ import {
 import { getFallbackMessage, isFallbackAnswer } from '../../services/settings';
 import { filterDocSources } from '../../services/queryAnalysis';
 import { tryStructuredInstituteAnswer } from '../../services/capMatrixLookup';
+import { integrations } from '../../config/env';
 import {
   answerQuestion,
   getDocPlan,
   buildDocCitations,
   retrieveForQuestion,
   analyzeQuery,
+  resolveDocMode,
 } from './rag.service';
 import {
   listSessions,
@@ -133,43 +135,19 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
   };
 
   try {
-    const analysis = analyzeQuery(`${content} ${englishQuery}`);
+    const analysis = analyzeQuery(content);
     const plan = getDocPlan();
-    const scopedSources = filterDocSources(plan.sources, content, analysis.intent);
-    const docMode =
-      scopedSources.length <= 2 && analysis.isInstituteLookup ? 'whole_file' : plan.mode;
-
-    const streamStructuredInstitute = (): boolean => {
-      if (!analysis.instituteCodes.length) return false;
-      const structured = tryStructuredInstituteAnswer({ question: content, language, analysis });
-      if (!structured) return false;
-
-      send({ delta: structured.content });
-      const assistantMessage = persistAssistantTurn({
-        sessionId,
-        userId,
-        content: structured.content,
-        language,
-        isGrounded: true,
-        isFallback: false,
-        citations: structured.citations,
-        retrievalScore: structured.retrievalScore,
-        model: structured.model,
-        promptTokens: structured.promptTokens,
-        completionTokens: structured.completionTokens,
-        sourceChunks: structured.sourceChunks,
-        firstUserContent: session.title ? '' : content,
-      });
-      send({ done: true, message: assistantMessage });
-      res.end();
-      return true;
-    };
+    let sources = filterDocSources(plan.sources, content, analysis.intent);
+    if (!sources.length) sources = plan.sources;
+    const docMode = resolveDocMode(sources, analysis);
 
     const streamDocEngine = async (): Promise<boolean> => {
       if (!plan.active) return false;
       let sentAny = false;
       try {
-        const hintParts: string[] = [];
+        const hintParts: string[] = [
+          'Read the attached PDF(s) completely. For seat-matrix PDFs, scan ALL pages.',
+        ];
         if (analysis.instituteCodes.length) {
           hintParts.push(
             `List ALL courses and sanctioned intake for institute code(s) ${analysis.instituteCodes.join(', ')} across ALL pages.`,
@@ -183,10 +161,10 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
           question: content,
           language,
           mode: docMode,
-          sources: scopedSources,
+          sources,
           vectorStoreId: plan.vectorStoreId,
           categoryHint: analysis.categoryHint,
-          retrievalHint: hintParts.join(' ') || undefined,
+          retrievalHint: hintParts.join(' '),
         });
         let fullText = '';
         let next = await gen.next();
@@ -201,7 +179,7 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
 
         if (!fullText || isFallbackAnswer(fullText)) return false;
 
-        const scopedPlan = { ...plan, sources: scopedSources };
+        const scopedPlan = { ...plan, sources, mode: docMode };
         const assistantMessage = persistAssistantTurn({
           sessionId,
           userId,
@@ -303,9 +281,59 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
       res.end();
     };
 
+    // PDF-only mode: OpenAI reads uploaded PDFs directly (no local RAG).
+    if (integrations.openaiPdfOnly) {
+      if (await streamDocEngine()) return;
+      const fb = getFallbackMessage(language);
+      send({ delta: fb });
+      const assistantMessage = persistAssistantTurn({
+        sessionId,
+        userId,
+        content: fb,
+        language,
+        isGrounded: false,
+        isFallback: true,
+        citations: [],
+        retrievalScore: 0,
+        model: 'fallback',
+        promptTokens: 0,
+        completionTokens: 0,
+        sourceChunks: [],
+        firstUserContent: session.title ? '' : content,
+      });
+      send({ done: true, message: assistantMessage });
+      res.end();
+      return;
+    }
+
+    const streamStructuredInstitute = (): boolean => {
+      if (!analysis.instituteCodes.length) return false;
+      const structured = tryStructuredInstituteAnswer({ question: content, language, analysis });
+      if (!structured) return false;
+
+      send({ delta: structured.content });
+      const assistantMessage = persistAssistantTurn({
+        sessionId,
+        userId,
+        content: structured.content,
+        language,
+        isGrounded: true,
+        isFallback: false,
+        citations: structured.citations,
+        retrievalScore: structured.retrievalScore,
+        model: structured.model,
+        promptTokens: structured.promptTokens,
+        completionTokens: structured.completionTokens,
+        sourceChunks: structured.sourceChunks,
+        firstUserContent: session.title ? '' : content,
+      });
+      send({ done: true, message: assistantMessage });
+      res.end();
+      return true;
+    };
+
     if (streamStructuredInstitute()) return;
 
-    // Seat matrix / institute → doc engine when structured KB has no indexed records.
     if (plan.active && analysis.intent === 'seat_matrix' && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
       if (await streamDocEngine()) return;
     }

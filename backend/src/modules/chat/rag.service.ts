@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {
   embed,
   embedQuery,
@@ -8,6 +9,7 @@ import {
   type RetrievedChunk,
   type DocAnswerResult,
   type DocSource,
+  type DocAnswerMode,
 } from '../../services/openai';
 import {
   retrieve,
@@ -34,6 +36,10 @@ import { db } from '../../db/connection';
 import { env, integrations } from '../../config/env';
 import { logger } from '../../lib/logger';
 import type { CitationDTO, Locale } from '../../types';
+
+/** Max combined PDF bytes to attach all files in context (whole_file mode). */
+const WHOLE_FILE_MAX_BYTES = 25 * 1024 * 1024;
+const WHOLE_FILE_MAX_DOCS = 8;
 
 export interface AnswerResult {
   content: string;
@@ -63,7 +69,7 @@ function resolveCourse(userId: string | null | undefined): string | null {
 
 export interface DocPlan {
   active: boolean;
-  mode: import('../../services/openai').DocAnswerMode;
+  mode: DocAnswerMode;
   sources: DocSource[];
   vectorStoreId: string | null;
 }
@@ -74,27 +80,51 @@ export function getDocPlan(): DocPlan {
   if (!integrations.openaiDocsEnabled) return INACTIVE_PLAN;
   const rows = db
     .prepare(
-      `SELECT d.id AS documentId, d.title AS title, d.openai_file_id AS fileId,
-              COALESCE(SUM(LENGTH(c.content)), 0) AS chars
+      `SELECT d.id AS documentId, d.title AS title, d.openai_file_id AS fileId, d.file_path AS filePath,
+              d.source_type AS sourceType
          FROM kb_documents d
-         LEFT JOIN kb_chunks c ON c.document_id = d.id AND c.is_active = 1
-        WHERE d.is_active = 1 AND d.deleted_at IS NULL AND d.openai_file_id IS NOT NULL
-        GROUP BY d.id, d.title, d.openai_file_id`,
+        WHERE d.is_active = 1 AND d.deleted_at IS NULL AND d.openai_file_id IS NOT NULL`,
     )
-    .all() as Array<{ documentId: string; title: string; fileId: string; chars: number }>;
+    .all() as Array<{
+      documentId: string;
+      title: string;
+      fileId: string;
+      filePath: string | null;
+      sourceType: string;
+    }>;
 
   const sources: DocSource[] = rows
     .filter((r) => r.fileId)
     .map((r) => ({ documentId: r.documentId, title: r.title, fileId: r.fileId }));
   if (sources.length === 0) return INACTIVE_PLAN;
 
-  const totalChars = rows.reduce((s, r) => s + (r.chars || 0), 0);
   const vectorStoreId = getVectorStoreId();
-  if (totalChars <= env.kbWholeFileMaxChars) {
+  let totalPdfBytes = 0;
+  for (const r of rows) {
+    if (r.sourceType === 'pdf' && r.filePath && fs.existsSync(r.filePath)) {
+      totalPdfBytes += fs.statSync(r.filePath).size;
+    }
+  }
+
+  const useWholeFile =
+    sources.length <= WHOLE_FILE_MAX_DOCS &&
+    (totalPdfBytes === 0 || totalPdfBytes <= WHOLE_FILE_MAX_BYTES);
+
+  if (useWholeFile) {
     return { active: true, mode: 'whole_file', sources, vectorStoreId };
   }
   if (vectorStoreId) return { active: true, mode: 'file_search', sources, vectorStoreId };
   return INACTIVE_PLAN;
+}
+
+/** Pick whole_file (PDFs attached) vs file_search for a scoped set of sources. */
+export function resolveDocMode(sources: DocSource[], analysis: QueryAnalysis): DocAnswerMode {
+  if (sources.length === 0) return 'file_search';
+  if (analysis.isInstituteLookup || analysis.intent === 'seat_matrix') {
+    if (sources.length <= WHOLE_FILE_MAX_DOCS) return 'whole_file';
+  }
+  if (sources.length <= WHOLE_FILE_MAX_DOCS) return 'whole_file';
+  return 'file_search';
 }
 
 export function buildDocCitations(result: DocAnswerResult, plan: DocPlan): CitationDTO[] {
@@ -133,23 +163,68 @@ export function fallbackResult(
   };
 }
 
-function docRetrievalHint(analysis: QueryAnalysis): string | undefined {
-  const parts: string[] = [];
+function docRetrievalHint(analysis: QueryAnalysis): string {
+  const parts: string[] = [
+    'Read the attached PDF(s) completely before answering. For seat-matrix PDFs, scan ALL pages.',
+  ];
   if (analysis.instituteCodes.length) {
     parts.push(
-      `Find institute code(s) ${analysis.instituteCodes.join(', ')} in the seat matrix. List EVERY course/branch and sanctioned intake (SI) for each institute across ALL pages of the document.`,
+      `Find institute code(s) ${analysis.instituteCodes.join(', ')}. List EVERY course/branch with sanctioned intake (SI), MS seats, and category breakdown. Do not stop after the first course.`,
     );
   }
   if (analysis.categoryHint) {
-    parts.push(`Use ${analysis.categoryHint} category cut-offs/seats only — not a different category.`);
+    parts.push(
+      `User asked about ${analysis.categoryHint} category — use ${analysis.categoryHint} columns only, not All India/Open unless asked.`,
+    );
   }
   if (analysis.districtHint) {
-    parts.push(`Focus on institutes in ${analysis.districtHint} district if present in sources.`);
+    parts.push(`Focus on ${analysis.districtHint} district if relevant.`);
   }
-  return parts.length ? parts.join(' ') : undefined;
+  return parts.join(' ');
 }
 
-/** Semantic + institute-code literal retrieval merged for seat-matrix completeness. */
+export async function tryDocEngine(params: {
+  question: string;
+  language: Locale;
+  plan: DocPlan;
+  analysis: QueryAnalysis;
+}): Promise<AnswerResult | null> {
+  if (!params.plan.active) return null;
+
+  let sources = filterDocSources(params.plan.sources, params.question, params.analysis.intent);
+  if (!sources.length) sources = params.plan.sources;
+
+  const mode = resolveDocMode(sources, params.analysis);
+  const scopedPlan: DocPlan = { ...params.plan, sources, mode };
+
+  try {
+    const docRes = await answerFromDocs({
+      question: params.question,
+      language: params.language,
+      mode,
+      sources: scopedPlan.sources,
+      vectorStoreId: scopedPlan.vectorStoreId,
+      categoryHint: params.analysis.categoryHint,
+      retrievalHint: docRetrievalHint(params.analysis),
+    });
+    if (!docRes.content || isFallbackAnswer(docRes.content)) return null;
+    return {
+      content: docRes.content,
+      language: params.language,
+      citations: buildDocCitations(docRes, scopedPlan),
+      isFallback: false,
+      retrievalScore: 1,
+      model: docRes.model,
+      promptTokens: docRes.promptTokens,
+      completionTokens: docRes.completionTokens,
+      sourceChunks: [],
+    };
+  } catch (err) {
+    logger.error({ err }, 'doc engine answer failed');
+    return null;
+  }
+}
+
 export async function retrieveForQuestion(params: {
   englishQuery: string;
   language: Locale;
@@ -184,24 +259,6 @@ export async function retrieveForQuestion(params: {
   return trimChunksToCharBudget(merged, analysis.isInstituteLookup ? 80000 : 50000);
 }
 
-function toCitations(retrieved: RetrievedChunk[]): CitationDTO[] {
-  return retrieved.map((c) => ({
-    documentId: c.documentId,
-    chunkId: c.chunkId,
-    title: c.title,
-    sourceLocator: c.sourceLocator,
-    score: c.score,
-  }));
-}
-
-function toSourceChunks(retrieved: RetrievedChunk[]) {
-  return retrieved.map((c) => ({
-    chunkId: c.chunkId,
-    documentId: c.documentId,
-    score: c.score,
-  }));
-}
-
 function buildLocalAnswer(
   language: Locale,
   retrieved: RetrievedChunk[],
@@ -211,89 +268,41 @@ function buildLocalAnswer(
   return {
     content: isFallback ? getFallbackMessage(language) : result.content,
     language,
-    citations: isFallback ? [] : toCitations(retrieved),
+    citations: isFallback
+      ? []
+      : retrieved.map((c) => ({
+          documentId: c.documentId,
+          chunkId: c.chunkId,
+          title: c.title,
+          sourceLocator: c.sourceLocator,
+          score: c.score,
+        })),
     isFallback,
     retrievalScore: isFallback ? 0 : retrieved[0]?.score ?? 0,
     model: result.model,
     promptTokens: result.promptTokens,
     completionTokens: result.completionTokens,
-    sourceChunks: isFallback ? [] : toSourceChunks(retrieved),
+    sourceChunks: isFallback
+      ? []
+      : retrieved.map((c) => ({ chunkId: c.chunkId, documentId: c.documentId, score: c.score })),
   };
 }
 
-export function prefersDocEngine(question: string, analysis: QueryAnalysis, topScore: number): boolean {
-  if (analysis.isInstituteLookup || analysis.isSeatMatrix) return true;
-  if (topScore >= 0.42) return false;
-  const q = question.toLowerCase();
-  return /institute|college|intake|fee|seat|matrix|cut.?off|merit|allotment|sanctioned|percentile/.test(q);
-}
-
-async function tryDocEngine(params: {
+async function answerQuestionHybrid(params: {
   question: string;
   language: Locale;
-  plan: DocPlan;
-  analysis: QueryAnalysis;
-}): Promise<AnswerResult | null> {
-  if (!params.plan.active) return null;
-
-  const sources = filterDocSources(params.plan.sources, params.question, params.analysis.intent);
-  const scopedPlan: DocPlan = { ...params.plan, sources };
-
-  // Prefer whole_file when only 1–2 matrix docs (model sees every page/table row).
-  let mode = scopedPlan.mode;
-  if (scopedPlan.sources.length <= 2 && params.analysis.isInstituteLookup) {
-    mode = 'whole_file';
-  }
-
-  try {
-    const docRes = await answerFromDocs({
-      question: params.question,
-      language: params.language,
-      mode,
-      sources: scopedPlan.sources,
-      vectorStoreId: scopedPlan.vectorStoreId,
-      categoryHint: params.analysis.categoryHint,
-      retrievalHint: docRetrievalHint(params.analysis),
-    });
-    if (!docRes.content || isFallbackAnswer(docRes.content)) return null;
-    return {
-      content: docRes.content,
-      language: params.language,
-      citations: buildDocCitations(docRes, scopedPlan),
-      isFallback: false,
-      retrievalScore: 1,
-      model: docRes.model,
-      promptTokens: docRes.promptTokens,
-      completionTokens: docRes.completionTokens,
-      sourceChunks: [],
-    };
-  } catch (err) {
-    logger.error({ err }, 'doc engine answer failed');
-    return null;
-  }
-}
-
-/**
- * KB-grounded answer. Seat-matrix / institute-code queries prefer the OpenAI document
- * engine (full PDF page scan); local RAG uses institute-grouped chunks as fallback.
- */
-export async function answerQuestion(params: {
-  question: string;
-  language?: Locale;
   userId?: string | null;
+  analysis: QueryAnalysis;
+  plan: DocPlan;
 }): Promise<AnswerResult> {
-  const { question, userId } = params;
-  const { language, englishQuery } = await detectAndTranslate(question);
-  const analysis = analyzeQuery(`${question} ${englishQuery}`);
-  const plan = getDocPlan();
+  const { question, language, userId, analysis, plan } = params;
+  const { englishQuery } = await detectAndTranslate(question);
 
-  // Deterministic institute lookup from indexed CAP records (exact numbers, all courses).
   if (analysis.instituteCodes.length) {
     const structured = tryStructuredInstituteAnswer({ question, language, analysis });
     if (structured) return structured;
   }
 
-  // Seat matrix / institute intake → doc engine when structured KB has no records yet.
   if (plan.active && analysis.intent === 'seat_matrix' && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
     const docAnswer = await tryDocEngine({ question, language, plan, analysis });
     if (docAnswer) return docAnswer;
@@ -311,16 +320,18 @@ export async function answerQuestion(params: {
     }
   }
 
-  if (plan.active && prefersDocEngine(question, analysis, topScore)) {
+  const docFallback =
+    plan.active &&
+    (analysis.isInstituteLookup ||
+      analysis.isSeatMatrix ||
+      topScore < 0.42 ||
+      /institute|intake|seat|matrix|cut.?off|sanctioned/i.test(question));
+  if (docFallback) {
     const docAnswer = await tryDocEngine({ question, language, plan, analysis });
     if (docAnswer) return docAnswer;
   }
 
-  if (retrieved.length === 0) {
-    const docAnswer = await tryDocEngine({ question, language, plan, analysis });
-    if (docAnswer) return docAnswer;
-    return fallbackResult(language);
-  }
+  if (retrieved.length === 0) return fallbackResult(language);
 
   const result = await generateAnswer(englishQuery, retrieved, language, {
     categoryHint: analysis.categoryHint,
@@ -332,6 +343,33 @@ export async function answerQuestion(params: {
   }
 
   return buildLocalAnswer(language, retrieved, result, false);
+}
+
+/**
+ * KB-grounded answer.
+ * OPENAI_PDF_ONLY=true (default): OpenAI Responses API reads uploaded PDFs directly.
+ * OPENAI_PDF_ONLY=false: hybrid local RAG + structured lookup + doc engine fallback.
+ */
+export async function answerQuestion(params: {
+  question: string;
+  language?: Locale;
+  userId?: string | null;
+}): Promise<AnswerResult> {
+  const { question, userId } = params;
+  const { language } = await detectAndTranslate(question);
+  const analysis = analyzeQuery(question);
+  const plan = getDocPlan();
+
+  if (integrations.openaiPdfOnly) {
+    if (!plan.active) {
+      logger.warn('OPENAI_PDF_ONLY enabled but no OpenAI-uploaded KB documents');
+      return fallbackResult(language);
+    }
+    const docAnswer = await tryDocEngine({ question, language, plan, analysis });
+    return docAnswer ?? fallbackResult(language);
+  }
+
+  return answerQuestionHybrid({ question, language, userId, analysis, plan });
 }
 
 export { analyzeQuery, type QueryAnalysis };
