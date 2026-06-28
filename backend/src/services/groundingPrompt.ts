@@ -7,11 +7,11 @@ const LANGUAGE_LABEL: Record<Locale, string> = {
   mr: 'Marathi (Devanagari script only — never Latin transliteration)',
 };
 
-/** Gemini-style KB verification intro (client-required). */
+/** KB verification intro — uses the Disha app name (never third-party AI brands). */
 export const ANSWER_INTRO: Record<Locale, string> = {
-  en: 'This customized assistance from Gemini is tailored to your query. I have carefully verified the accuracy of this information to ensure it is drawn exclusively from the provided knowledge base, and no outside information has been included.',
-  hi: 'जेमिनी द्वारा प्रदान की गई यह सहायता आपके प्रश्न के अनुसार तैयार की गई है। उत्तर देने से पहले मैंने नॉलेज बेस की जानकारी की शुद्धता जाँची है; यह उत्तर केवल नॉलेज बेस की आधिकारिक जानकारी पर आधारित है — बाहरी जानकारी शामिल नहीं है।',
-  mr: 'जेमिनी कडून मिळणारी ही मदत कस्टमाइज्ड स्वरूपाची आहे. तुम्ही विचारलेल्या प्रश्नाचे उत्तर देण्यापूर्वी मी नॉलेज बेसमधील माहितीची अचूकता तपासली असून, हे उत्तर केवळ नॉलेज बेसमधील अधिकृत माहितीच्या आधारेच देत आहे. नॉलेज बेसच्या बाहेरचे कोणतेही उत्तर यामध्ये दिलेले नाही.',
+  en: 'This customized assistance from Disha is tailored to your query. I have carefully verified the accuracy of this information to ensure it is drawn exclusively from the provided knowledge base, and no outside information has been included.',
+  hi: 'दिशा द्वारा प्रदान की गई यह सहायता आपके प्रश्न के अनुसार तैयार की गई है। उत्तर देने से पहले मैंने नॉलेज बेस की जानकारी की शुद्धता जाँची है; यह उत्तर केवल नॉलेज बेस की आधिकारिक जानकारी पर आधारित है — बाहरी जानकारी शामिल नहीं है।',
+  mr: 'दिशा कडून मिळणारी ही मदत कस्टमाइज्ड स्वरूपाची आहे. तुम्ही विचारलेल्या प्रश्नाचे उत्तर देण्यापूर्वी मी नॉलेज बेसमधील माहितीची अचूकता तपासली असून, हे उत्तर केवळ नॉलेज बेसमधील अधिकृत माहितीच्या आधारेच देत आहे. नॉलेज बेसच्या बाहेरचे कोणतेही उत्तर यामध्ये दिलेले नाही.',
 };
 
 export const SOURCE_GAP_PHRASE: Record<Locale, string> = {
@@ -70,7 +70,7 @@ export function buildGroundingSystemPrompt(
     : `
 Source material is attached via files and/or file_search. Read ALL pages before answering. For seat matrix PDFs, scan every page for the institute code/name — list ALL courses and intake values found.`;
 
-  return `You are an expert AI Research Assistant for Maharashtra CAP, operating exactly like Google's NotebookLM. Answer strictly and exclusively from the provided sources. cetcell.mahacet.org is the final authority.
+  return `You are Disha (दिशा), the expert AI research assistant for Maharashtra CAP. Answer strictly and exclusively from the provided sources. cetcell.mahacet.org is the final authority.
 
 RULES:
 1. **Grounded in Context Only** — no outside knowledge. Synthesize across ALL relevant excerpts. If not in sources: "${SOURCE_GAP_PHRASE[language]}"
@@ -79,6 +79,7 @@ RULES:
 4. **Direct and Concise** — no generic greetings beyond the required intro paragraph; answer directly.
 5. **Structure for Readability** — ALWAYS use the required format: intro → direct answer → bulleted **Details** with **bold** key facts → **Sources**. Never one long unformatted paragraph.
 6. **Acknowledge Knowledge Gaps** — partial answer first, then **Not found in sources** for missing parts.
+7. **Branding** — refer to the assistant only as **Disha** (दिशा in Hindi/Marathi). NEVER mention Gemini, Google, NotebookLM, ChatGPT, OpenAI, or any other AI vendor in the answer.
 
 ${seatMatrixRules(opts?.categoryHint ?? null)}
 
