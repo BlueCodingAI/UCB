@@ -139,8 +139,9 @@ export async function generateAnswer(
   question: string,
   chunks: RetrievedChunk[],
   language: Locale,
+  opts?: { categoryHint?: string | null },
 ): Promise<ChatResult> {
-  const system = buildGroundingSystemPrompt(language)
+  const system = buildGroundingSystemPrompt(language, { categoryHint: opts?.categoryHint ?? null })
     .replace('{{RETRIEVED_CHUNKS}}', buildContext(chunks))
     .replaceAll('{{LANGUAGE}}', language);
 
@@ -160,7 +161,7 @@ export async function generateAnswer(
   const res = await client().chat.completions.create({
     model: env.openaiChatModel,
     temperature: 0.1,
-    max_tokens: 1400,
+    max_tokens: 2800,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: question },
@@ -180,8 +181,9 @@ export async function* generateAnswerStream(
   question: string,
   chunks: RetrievedChunk[],
   language: Locale,
+  opts?: { categoryHint?: string | null },
 ): AsyncGenerator<string, ChatResult, void> {
-  const system = buildGroundingSystemPrompt(language)
+  const system = buildGroundingSystemPrompt(language, { categoryHint: opts?.categoryHint ?? null })
     .replace('{{RETRIEVED_CHUNKS}}', buildContext(chunks))
     .replaceAll('{{LANGUAGE}}', language);
 
@@ -196,7 +198,7 @@ export async function* generateAnswerStream(
   const stream = await client().chat.completions.create({
     model: env.openaiChatModel,
     temperature: 0.1,
-    max_tokens: 1400,
+    max_tokens: 2800,
     stream: true,
     messages: [
       { role: 'system', content: system },
@@ -404,12 +406,13 @@ export async function deleteOpenAIFile(fileId: string): Promise<void> {
   }
 }
 
-function docGroundingInstructions(language: Locale): string {
-  return buildDocEngineInstructions(language);
+function docGroundingInstructions(language: Locale, categoryHint?: string | null): string {
+  return buildDocEngineInstructions(language, categoryHint);
 }
 
-function buildDocInput(question: string, mode: DocAnswerMode, sources: DocSource[]) {
-  const content: Array<Record<string, unknown>> = [{ type: 'input_text', text: question }];
+function buildDocInput(question: string, mode: DocAnswerMode, sources: DocSource[], extraContext?: string) {
+  const text = extraContext ? `${question}\n\n${extraContext}` : question;
+  const content: Array<Record<string, unknown>> = [{ type: 'input_text', text }];
   if (mode === 'whole_file') {
     for (const s of sources) content.push({ type: 'input_file', file_id: s.fileId });
   }
@@ -448,16 +451,18 @@ export async function answerFromDocs(params: {
   mode: DocAnswerMode;
   sources: DocSource[];
   vectorStoreId: string | null;
+  categoryHint?: string | null;
+  retrievalHint?: string;
 }): Promise<DocAnswerResult> {
   const res = await client().responses.create({
     model: env.openaiDocModel,
-    instructions: docGroundingInstructions(params.language),
+    instructions: docGroundingInstructions(params.language, params.categoryHint),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    input: buildDocInput(params.question, params.mode, params.sources) as any,
+    input: buildDocInput(params.question, params.mode, params.sources, params.retrievalHint) as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools: fileSearchTools(params.mode, params.vectorStoreId) as any,
     temperature: 0.1,
-    max_output_tokens: 2000,
+    max_output_tokens: 3500,
   });
   return {
     content: (res.output_text ?? '').trim(),
@@ -474,16 +479,18 @@ export async function* answerFromDocsStream(params: {
   mode: DocAnswerMode;
   sources: DocSource[];
   vectorStoreId: string | null;
+  categoryHint?: string | null;
+  retrievalHint?: string;
 }): AsyncGenerator<string, DocAnswerResult, void> {
   const stream = await client().responses.create({
     model: env.openaiDocModel,
-    instructions: docGroundingInstructions(params.language),
+    instructions: docGroundingInstructions(params.language, params.categoryHint),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    input: buildDocInput(params.question, params.mode, params.sources) as any,
+    input: buildDocInput(params.question, params.mode, params.sources, params.retrievalHint) as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools: fileSearchTools(params.mode, params.vectorStoreId) as any,
     temperature: 0.1,
-    max_output_tokens: 2000,
+    max_output_tokens: 3500,
     stream: true,
   });
 

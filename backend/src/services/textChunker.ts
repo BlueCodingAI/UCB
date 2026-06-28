@@ -51,6 +51,86 @@ function isMarkdownTable(block: string): boolean {
   return pipeRows >= 2 && lines.some((l) => /^\|?\s*:?-{3,}/.test(l));
 }
 
+/** Split a large table by institute code groups (seat matrix: all courses per institute in one chunk). */
+function chunkTableByInstitute(rows: string[], header: string[], maxChars: number): StructuredChunk[] {
+  const codeIdx = header.findIndex((h) => /institute|code|college\s*code|inst\.?\s*code/i.test(h));
+  const courseIdx = header.findIndex((h) => /course|branch|programme|program/i.test(h));
+
+  if (codeIdx < 0) return [];
+
+  const esc = (s: string) => s.replace(/\|/g, '\\|');
+  const fmtRow = (cells: string[]) => `| ${cells.map(esc).join(' | ')} |`;
+  const headerRow = fmtRow(header);
+  const sepRow = fmtRow(header.map(() => '---'));
+
+  const groups = new Map<string, string[][]>();
+  let lastCode = '';
+
+  for (const row of rows) {
+    const cells = parseTableRow(row);
+    if (cells.length < header.length) {
+      while (cells.length < header.length) cells.push('');
+    }
+    let code = (cells[codeIdx] ?? '').replace(/\D/g, '');
+    if (/^0\d{4}$/.test(code)) {
+      lastCode = code;
+    } else if (lastCode && !code) {
+      code = lastCode;
+      cells[codeIdx] = lastCode;
+    } else if (!code) continue;
+
+    const existing = groups.get(code) ?? [];
+    existing.push(cells);
+    groups.set(code, existing);
+  }
+
+  const out: StructuredChunk[] = [];
+  for (const [code, groupRows] of groups) {
+    const bodyRows = groupRows.map((cells) => fmtRow(cells));
+    let text = [headerRow, sepRow, ...bodyRows].join('\n');
+    const courses = groupRows
+      .map((r) => r[courseIdx >= 0 ? courseIdx : 1])
+      .filter(Boolean)
+      .join(', ');
+
+    if (text.length > maxChars) {
+      // Split large institutes but keep header; still better than arbitrary row splits.
+      const partial = chunkTable(text, maxChars);
+      partial.forEach((part, idx) => {
+        out.push({
+          content: part,
+          sourceLocator: `Institute ${code}${courses ? ` · ${courses.slice(0, 80)}` : ''} · part ${idx + 1}`,
+        });
+      });
+    } else {
+      out.push({
+        content: text,
+        sourceLocator: `Institute ${code}${courses ? ` · courses: ${courses.slice(0, 120)}` : ''}`,
+      });
+    }
+  }
+
+  return out;
+}
+
+/** Parse markdown table into header + body row strings. */
+function parseMarkdownTable(block: string): { header: string[]; rows: string[] } | null {
+  const lines = block.split('\n').filter((l) => l.trim());
+  if (lines.length < 2) return null;
+  const header = parseTableRow(lines[0]);
+  const rows = lines.slice(2).filter((l) => !/^\|?\s*:?-{3,}/.test(l.trim()));
+  return { header, rows };
+}
+
+function parseTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim().replace(/\\(.)/g, '$1'));
+}
+
 /** Split a large table by row groups, repeating the header in each chunk. */
 function chunkTable(block: string, maxChars: number): string[] {
   const lines = block.split('\n');
@@ -159,13 +239,23 @@ export function chunkStructuredText(
     for (const block of blocks) {
       const locator = pageLoc ?? 'document';
       if (isMarkdownTable(block)) {
-        const tableChunks = block.length <= maxChars ? [block] : chunkTable(block, maxChars);
-        tableChunks.forEach((tc, idx) => {
-          out.push({
-            content: tc,
-            sourceLocator: tableChunks.length > 1 ? `${locator} · table part ${idx + 1}` : `${locator} · table`,
+        const parsed = parseMarkdownTable(block);
+        const instituteChunks =
+          parsed && parsed.rows.length >= 2
+            ? chunkTableByInstitute(parsed.rows, parsed.header, maxChars)
+            : [];
+
+        if (instituteChunks.length > 0) {
+          out.push(...instituteChunks);
+        } else {
+          const tableChunks = block.length <= maxChars ? [block] : chunkTable(block, maxChars);
+          tableChunks.forEach((tc, idx) => {
+            out.push({
+              content: tc,
+              sourceLocator: tableChunks.length > 1 ? `${locator} · table part ${idx + 1}` : `${locator} · table`,
+            });
           });
-        });
+        }
       } else {
         const proseChunks = chunkProse(block, targetChars, maxChars);
         proseChunks.forEach((pc, idx) => {

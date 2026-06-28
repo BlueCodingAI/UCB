@@ -68,7 +68,7 @@ export const env = {
   // ~70K tokens of source (≈4 chars/token) — well within gpt-4o's 128K context,
   // leaving room for the prompt + a long table answer.
   kbWholeFileMaxChars: num('KB_WHOLE_FILE_MAX_CHARS', 280000),
-  ragFileSearchMaxResults: num('RAG_FILE_SEARCH_MAX_RESULTS', 30),
+  ragFileSearchMaxResults: num('RAG_FILE_SEARCH_MAX_RESULTS', 50),
   // Outbound proxy for OpenAI requests (e.g. when the server is behind a firewall).
   openaiProxyEnabled: bool('OPENAI_PROXY_ENABLED', false),
   openaiProxyUrl: str('OPENAI_PROXY_URL'), // http(s)://[user:pass@]host:port
@@ -112,7 +112,7 @@ export const env = {
   // are often only 0.30–0.45); the strict GROUNDING_PROMPT + exact-fallback gate
   // are the real backstop against off-topic context, so a low floor maximises
   // recall (finds info that IS in the KB) without weakening KB-only grounding.
-  ragTopK: num('RAG_TOP_K', 10),
+  ragTopK: num('RAG_TOP_K', 15),
   ragMinScore: num('RAG_MIN_SCORE', 0.18),
 
   // Ops

@@ -26,7 +26,14 @@ const boolCoerce = z
 
 const yearCoerce = z.coerce.number().int().min(2000).max(2100);
 
-export const createDocumentSchema = z.object({
+export const createDocumentSchema = z
+  .preprocess((raw) => {
+    const body = raw as Record<string, unknown>;
+    if (body && typeof body.url === 'string' && body.url.trim() && !body.sourceUrl) {
+      return { ...body, sourceUrl: body.url };
+    }
+    return body;
+  }, z.object({
   title: trimmed.min(1).max(300),
   description: z.string().trim().max(20000).optional(),
   sourceType: sourceTypeEnum,
@@ -37,7 +44,11 @@ export const createDocumentSchema = z.object({
   sourceUrl: trimmed.url().max(2000).optional(),
   content: z.string().trim().max(2_000_000).optional(),
   isActive: boolCoerce.optional(),
-});
+}))
+  .refine(
+    (d) => d.sourceType !== 'google_sheet' || !!d.sourceUrl?.trim(),
+    { message: 'sourceUrl is required for Google Sheets', path: ['sourceUrl'] },
+  );
 
 export const updateDocumentSchema = z
   .object({

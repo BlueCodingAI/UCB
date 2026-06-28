@@ -92,7 +92,7 @@ export default function AdminKbNewPage() {
           capYear: capYear.trim() ? Number(capYear) : null,
           topic: topic.trim() || null,
           isActive,
-          ...(inputKind === 'url' ? { url: url.trim() } : { content: content.trim() }),
+          ...(inputKind === 'url' ? { sourceUrl: url.trim() } : { content: content.trim() }),
         };
       }
       const doc = await api.post<KbDocument>('/admin/kb/documents', body, { realm: 'admin' });
@@ -162,7 +162,11 @@ export default function AdminKbNewPage() {
                   label={sourceType === 'google_sheet' ? 'Google Sheet URL' : 'URL'}
                   htmlFor="kb-url"
                   required
-                  hint="We fetch and index the content from this link."
+                  hint={
+                    sourceType === 'google_sheet'
+                      ? 'Paste the share link. The sheet must be shared as “Anyone with the link can view”, or export .xlsx and upload as a file instead.'
+                      : 'We fetch and index the content from this link.'
+                  }
                 >
                   <Input
                     id="kb-url"

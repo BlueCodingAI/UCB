@@ -207,6 +207,56 @@ export function fuseRetrievalResults(
     .slice(0, topK);
 }
 
+/**
+ * Fetch every active chunk whose content contains an institute code (e.g. 06217).
+ * Used for seat-matrix queries so ALL courses across pages are available to the LLM.
+ */
+export function retrieveByInstituteCodes(codes: string[], maxChunks = 40): RetrievedChunk[] {
+  if (!codes.length) return [];
+  ensureLoaded();
+
+  const matched: RetrievedChunk[] = [];
+  const seen = new Set<string>();
+
+  for (const code of codes) {
+    for (const c of cache) {
+      if (!c.content.includes(code)) continue;
+      if (seen.has(c.chunkId)) continue;
+      seen.add(c.chunkId);
+      matched.push({
+        documentId: c.documentId,
+        chunkId: c.chunkId,
+        title: c.title,
+        content: c.content,
+        sourceLocator: c.sourceLocator,
+        score: 0.95,
+      });
+    }
+  }
+
+  // Prefer institute-grouped chunks (locator mentions the code) then larger chunks.
+  matched.sort((a, b) => {
+    const aInst = a.sourceLocator?.includes('Institute') ? 1 : 0;
+    const bInst = b.sourceLocator?.includes('Institute') ? 1 : 0;
+    if (aInst !== bInst) return bInst - aInst;
+    return b.content.length - a.content.length;
+  });
+
+  return matched.slice(0, maxChunks);
+}
+
+/** Cap total context size while keeping as many chunks as possible. */
+export function trimChunksToCharBudget(chunks: RetrievedChunk[], maxChars = 70000): RetrievedChunk[] {
+  let total = 0;
+  const out: RetrievedChunk[] = [];
+  for (const c of chunks) {
+    if (total + c.content.length > maxChars && out.length > 0) break;
+    out.push(c);
+    total += c.content.length;
+  }
+  return out;
+}
+
 export function vectorCacheSize(): number {
   ensureLoaded();
   return cache.length;

@@ -9,7 +9,12 @@ import {
   type DocAnswerResult,
   type DocSource,
 } from '../../services/openai';
-import { retrieve, fuseRetrievalResults } from '../../services/vectorStore';
+import {
+  retrieve,
+  fuseRetrievalResults,
+  retrieveByInstituteCodes,
+  trimChunksToCharBudget,
+} from '../../services/vectorStore';
 import {
   getFallbackMessage,
   getRagTopK,
@@ -17,6 +22,12 @@ import {
   getSetting,
   isFallbackAnswer,
 } from '../../services/settings';
+import {
+  analyzeQuery,
+  expandRetrievalQuery,
+  filterDocSources,
+  type QueryAnalysis,
+} from '../../services/queryAnalysis';
 import { effectivePlan } from '../../middleware/auth';
 import { db } from '../../db/connection';
 import { env, integrations } from '../../config/env';
@@ -121,32 +132,55 @@ export function fallbackResult(
   };
 }
 
-/** Dual embedding retrieval: domain-prefixed + raw query, fused and de-duplicated. */
+function docRetrievalHint(analysis: QueryAnalysis): string | undefined {
+  const parts: string[] = [];
+  if (analysis.instituteCodes.length) {
+    parts.push(
+      `Find institute code(s) ${analysis.instituteCodes.join(', ')} in the seat matrix. List EVERY course/branch and sanctioned intake (SI) for each institute across ALL pages of the document.`,
+    );
+  }
+  if (analysis.categoryHint) {
+    parts.push(`Use ${analysis.categoryHint} category cut-offs/seats only — not a different category.`);
+  }
+  if (analysis.districtHint) {
+    parts.push(`Focus on institutes in ${analysis.districtHint} district if present in sources.`);
+  }
+  return parts.length ? parts.join(' ') : undefined;
+}
+
+/** Semantic + institute-code literal retrieval merged for seat-matrix completeness. */
 export async function retrieveForQuestion(params: {
   englishQuery: string;
   language: Locale;
   userId?: string | null;
+  analysis?: QueryAnalysis;
 }): Promise<RetrievedChunk[]> {
-  const topK = getRagTopK();
-  const minScore = getRagMinScore();
-  const poolK = Math.min(topK * 2, 20);
+  const analysis = params.analysis ?? analyzeQuery(params.englishQuery);
+  const expanded = expandRetrievalQuery(params.englishQuery, analysis);
+  const topK = analysis.isInstituteLookup ? Math.max(getRagTopK(), 15) : getRagTopK();
+  const minScore = analysis.isInstituteLookup ? getRagMinScore() * 0.65 : getRagMinScore();
+  const poolK = Math.min(topK * 2, 30);
 
-  const [vecPrefixed, vecRaw] = await Promise.all([
-    embedQuery(params.englishQuery),
-    embed(params.englishQuery),
-  ]);
+  const [vecPrefixed, vecRaw] = await Promise.all([embedQuery(expanded), embed(expanded)]);
 
   const baseOpts = {
     language: params.language,
     course: resolveCourse(params.userId),
     capYear: getSetting<number>('current_cap_year', env.currentCapYear),
     topK: poolK,
-    minScore: minScore * 0.75,
+    minScore: minScore * 0.7,
   };
 
-  const fromPrefixed = retrieve(vecPrefixed, params.englishQuery, baseOpts);
+  const fromPrefixed = retrieve(vecPrefixed, expanded, baseOpts);
   const fromRaw = retrieve(vecRaw, params.englishQuery, baseOpts);
-  return fuseRetrievalResults(fromPrefixed, fromRaw, topK, minScore);
+  let merged = fuseRetrievalResults(fromPrefixed, fromRaw, poolK, minScore);
+
+  if (analysis.instituteCodes.length) {
+    const literal = retrieveByInstituteCodes(analysis.instituteCodes, 40);
+    merged = fuseRetrievalResults(literal, merged, topK, 0.1);
+  }
+
+  return trimChunksToCharBudget(merged, analysis.isInstituteLookup ? 80000 : 50000);
 }
 
 function toCitations(retrieved: RetrievedChunk[]): CitationDTO[] {
@@ -186,34 +220,45 @@ function buildLocalAnswer(
   };
 }
 
-/** Questions that benefit from OpenAI's native PDF/table engine. */
-export function prefersDocEngine(question: string, topScore: number): boolean {
-  if (topScore >= 0.38) return false;
+export function prefersDocEngine(question: string, analysis: QueryAnalysis, topScore: number): boolean {
+  if (analysis.isInstituteLookup || analysis.isSeatMatrix) return true;
+  if (topScore >= 0.42) return false;
   const q = question.toLowerCase();
-  return /institute|college|intake|fee|fees|seat|table|list|schedule|code|category|cut.?off|merit|allotment|option\s*form|round\s*\d|pdf|document|brochure|sanctioned/.test(
-    q,
-  );
+  return /institute|college|intake|fee|seat|matrix|cut.?off|merit|allotment|sanctioned|percentile/.test(q);
 }
 
 async function tryDocEngine(params: {
   question: string;
   language: Locale;
   plan: DocPlan;
+  analysis: QueryAnalysis;
 }): Promise<AnswerResult | null> {
   if (!params.plan.active) return null;
+
+  const sources = filterDocSources(params.plan.sources, params.question);
+  const scopedPlan: DocPlan = { ...params.plan, sources };
+
+  // Prefer whole_file when only 1–2 matrix docs (model sees every page/table row).
+  let mode = scopedPlan.mode;
+  if (scopedPlan.sources.length <= 2 && params.analysis.isInstituteLookup) {
+    mode = 'whole_file';
+  }
+
   try {
     const docRes = await answerFromDocs({
       question: params.question,
       language: params.language,
-      mode: params.plan.mode,
-      sources: params.plan.sources,
-      vectorStoreId: params.plan.vectorStoreId,
+      mode,
+      sources: scopedPlan.sources,
+      vectorStoreId: scopedPlan.vectorStoreId,
+      categoryHint: params.analysis.categoryHint,
+      retrievalHint: docRetrievalHint(params.analysis),
     });
     if (!docRes.content || isFallbackAnswer(docRes.content)) return null;
     return {
       content: docRes.content,
       language: params.language,
-      citations: buildDocCitations(docRes, params.plan),
+      citations: buildDocCitations(docRes, scopedPlan),
       isFallback: false,
       retrievalScore: 1,
       model: docRes.model,
@@ -228,8 +273,8 @@ async function tryDocEngine(params: {
 }
 
 /**
- * Strict KB-grounded answer. Uses improved local chunk RAG first; escalates to
- * the OpenAI document engine for table/PDF-heavy or low-confidence queries.
+ * KB-grounded answer. Seat-matrix / institute-code queries prefer the OpenAI document
+ * engine (full PDF page scan); local RAG uses institute-grouped chunks as fallback.
  */
 export async function answerQuestion(params: {
   question: string;
@@ -238,40 +283,48 @@ export async function answerQuestion(params: {
 }): Promise<AnswerResult> {
   const { question, userId } = params;
   const { language, englishQuery } = await detectAndTranslate(question);
+  const analysis = analyzeQuery(`${question} ${englishQuery}`);
   const plan = getDocPlan();
 
-  const retrieved = await retrieveForQuestion({ englishQuery, language, userId });
+  // Seat matrix / institute intake → doc engine first (NotebookLM-style full-doc read).
+  if (plan.active && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
+    const docAnswer = await tryDocEngine({ question, language, plan, analysis });
+    if (docAnswer) return docAnswer;
+  }
+
+  const retrieved = await retrieveForQuestion({ englishQuery, language, userId, analysis });
   const topScore = retrieved[0]?.score ?? 0;
 
-  // Strong local retrieval → answer from improved chunks (primary path after re-index).
-  if (retrieved.length > 0 && topScore >= 0.32) {
-    const result = await generateAnswer(englishQuery, retrieved, language);
+  if (retrieved.length > 0) {
+    const result = await generateAnswer(englishQuery, retrieved, language, {
+      categoryHint: analysis.categoryHint,
+    });
     if (!isFallbackAnswer(result.content)) {
       return buildLocalAnswer(language, retrieved, result, false);
     }
   }
 
-  // Low confidence or table-heavy → try OpenAI document engine (native PDF parsing).
-  if (plan.active && (prefersDocEngine(question, topScore) || retrieved.length === 0)) {
-    const docAnswer = await tryDocEngine({ question, language, plan });
+  if (plan.active && prefersDocEngine(question, analysis, topScore)) {
+    const docAnswer = await tryDocEngine({ question, language, plan, analysis });
     if (docAnswer) return docAnswer;
   }
 
-  // KB miss at retrieval layer.
   if (retrieved.length === 0) {
-    // Last attempt: doc engine even for generic questions if local found nothing.
-    const docAnswer = await tryDocEngine({ question, language, plan });
+    const docAnswer = await tryDocEngine({ question, language, plan, analysis });
     if (docAnswer) return docAnswer;
     return fallbackResult(language);
   }
 
-  // Have chunks but model declined — still grounded attempt before final fallback.
-  const result = await generateAnswer(englishQuery, retrieved, language);
+  const result = await generateAnswer(englishQuery, retrieved, language, {
+    categoryHint: analysis.categoryHint,
+  });
   if (isFallbackAnswer(result.content)) {
-    const docAnswer = await tryDocEngine({ question, language, plan });
+    const docAnswer = await tryDocEngine({ question, language, plan, analysis });
     if (docAnswer) return docAnswer;
     return buildLocalAnswer(language, retrieved, result, true);
   }
 
   return buildLocalAnswer(language, retrieved, result, false);
 }
+
+export { analyzeQuery, type QueryAnalysis };

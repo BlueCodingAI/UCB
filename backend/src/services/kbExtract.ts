@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import * as XLSX from 'xlsx';
 import { extractPdfText } from './pdfExtract';
+import { downloadGoogleSheetToFile } from './googleSheet';
 import {
   chunkStructuredText,
   buildEmbeddingText,
@@ -74,8 +75,14 @@ export async function extractDocumentText(doc: KbDocMeta): Promise<string> {
     type === 'google_sheet' ||
     (doc.file_mime && /sheet|excel|csv/i.test(doc.file_mime))
   ) {
-    if (!doc.file_path) throw new Error('spreadsheet document has no file_path');
-    return extractSpreadsheetText(doc.file_path);
+    if (doc.file_path && fs.existsSync(doc.file_path)) {
+      return extractSpreadsheetText(doc.file_path);
+    }
+    if (doc.source_url) {
+      const dl = await downloadGoogleSheetToFile(doc.source_url);
+      return extractSpreadsheetText(dl.filePath);
+    }
+    throw new Error('spreadsheet document has no file_path or source_url');
   }
 
   return extractPlainText(doc);

@@ -5,6 +5,7 @@ import { parseOffset, offsetMeta } from '../../lib/paginate';
 import { writeAudit } from '../../middleware/audit';
 import { enqueue } from '../../services/jobs';
 import { embed } from '../../services/openai';
+import { downloadGoogleSheetToFile } from '../../services/googleSheet';
 import { retrieve, rebuildVectorCache } from '../../services/vectorStore';
 import { getRagTopK, getRagMinScore, getSetting } from '../../services/settings';
 import { env } from '../../config/env';
@@ -48,9 +49,14 @@ export const createDoc = asyncHandler(async (req, res) => {
     isActive?: boolean;
   };
 
-  const file = req.file
+  let file = req.file
     ? { path: req.file.path, mimetype: req.file.mimetype, size: req.file.size }
     : null;
+
+  if (body.sourceType === 'google_sheet' && body.sourceUrl && !file) {
+    const dl = await downloadGoogleSheetToFile(body.sourceUrl);
+    file = { path: dl.filePath, mimetype: dl.fileMime, size: dl.fileSize };
+  }
 
   const doc = createDocument({
     title: body.title,

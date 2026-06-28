@@ -8,7 +8,14 @@ import {
   type RetrievedChunk,
 } from '../../services/openai';
 import { getFallbackMessage, isFallbackAnswer } from '../../services/settings';
-import { answerQuestion, getDocPlan, buildDocCitations, retrieveForQuestion, prefersDocEngine } from './rag.service';
+import { filterDocSources } from '../../services/queryAnalysis';
+import {
+  answerQuestion,
+  getDocPlan,
+  buildDocCitations,
+  retrieveForQuestion,
+  analyzeQuery,
+} from './rag.service';
 import {
   listSessions,
   createSession,
@@ -125,24 +132,34 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
   };
 
   try {
+    const analysis = analyzeQuery(`${content} ${englishQuery}`);
     const plan = getDocPlan();
-    const retrieved: RetrievedChunk[] = await retrieveForQuestion({
-      englishQuery,
-      language,
-      userId,
-    });
-    const topScore = retrieved[0]?.score ?? 0;
+    const scopedSources = filterDocSources(plan.sources, content);
+    const docMode =
+      scopedSources.length <= 2 && analysis.isInstituteLookup ? 'whole_file' : plan.mode;
 
     const streamDocEngine = async (): Promise<boolean> => {
       if (!plan.active) return false;
       let sentAny = false;
       try {
+        const hintParts: string[] = [];
+        if (analysis.instituteCodes.length) {
+          hintParts.push(
+            `List ALL courses and sanctioned intake for institute code(s) ${analysis.instituteCodes.join(', ')} across ALL pages.`,
+          );
+        }
+        if (analysis.categoryHint) {
+          hintParts.push(`Use ${analysis.categoryHint} category data only.`);
+        }
+
         const gen = answerFromDocsStream({
           question: content,
           language,
-          mode: plan.mode,
-          sources: plan.sources,
+          mode: docMode,
+          sources: scopedSources,
           vectorStoreId: plan.vectorStoreId,
+          categoryHint: analysis.categoryHint,
+          retrievalHint: hintParts.join(' ') || undefined,
         });
         let fullText = '';
         let next = await gen.next();
@@ -157,6 +174,7 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
 
         if (!fullText || isFallbackAnswer(fullText)) return false;
 
+        const scopedPlan = { ...plan, sources: scopedSources };
         const assistantMessage = persistAssistantTurn({
           sessionId,
           userId,
@@ -164,7 +182,7 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
           language,
           isGrounded: true,
           isFallback: false,
-          citations: buildDocCitations(r, plan),
+          citations: buildDocCitations(r, scopedPlan),
           retrievalScore: 1,
           model: r.model,
           promptTokens: r.promptTokens,
@@ -215,7 +233,9 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
           score: c.score,
         }));
 
-        const gen = generateAnswerStream(englishQuery, chunks, language);
+        const gen = generateAnswerStream(englishQuery, chunks, language, {
+          categoryHint: analysis.categoryHint,
+        });
         let next = await gen.next();
         while (!next.done) {
           fullText += next.value;
@@ -256,10 +276,23 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
       res.end();
     };
 
-    // Local-first when retrieval is confident (matches rag.service).
-    if (retrieved.length > 0 && topScore >= 0.32) {
+    // Seat matrix / institute → doc engine first (matches rag.service).
+    if (plan.active && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
+      if (await streamDocEngine()) return;
+    }
+
+    const retrieved = await retrieveForQuestion({
+      englishQuery,
+      language,
+      userId,
+      analysis,
+    });
+
+    if (retrieved.length > 0) {
       let fullText = '';
-      const gen = generateAnswerStream(englishQuery, retrieved, language);
+      const gen = generateAnswerStream(englishQuery, retrieved, language, {
+        categoryHint: analysis.categoryHint,
+      });
       let next = await gen.next();
       while (!next.done) {
         fullText += next.value;
@@ -283,7 +316,7 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
             sourceLocator: c.sourceLocator,
             score: c.score,
           })),
-          retrievalScore: topScore,
+          retrievalScore: retrieved[0]?.score ?? 0,
           model: result.model,
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
@@ -300,17 +333,13 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
       }
     }
 
-    if (plan.active && (prefersDocEngine(content, topScore) || retrieved.length === 0)) {
-      if (await streamDocEngine()) return;
-    }
+    if (await streamDocEngine()) return;
 
     if (retrieved.length === 0) {
-      if (await streamDocEngine()) return;
       await streamLocal([]);
       return;
     }
 
-    if (await streamDocEngine()) return;
     await streamLocal(retrieved);
   } catch (err) {
     logger.error({ err, sessionId }, 'chat stream failed');
