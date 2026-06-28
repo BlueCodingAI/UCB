@@ -44,10 +44,99 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   return nodes;
 }
 
+function isTableBlock(lines: string[]): boolean {
+  if (lines.length < 2) return false;
+  const pipeRows = lines.filter((l) => (l.match(/\|/g) ?? []).length >= 2);
+  return pipeRows.length >= 2;
+}
+
+function parseTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim().replace(/\\(.)/g, '$1'));
+}
+
+function isSeparatorRow(line: string): boolean {
+  return /^\|?\s*:?-{3,}/.test(line.trim());
+}
+
+function renderTableBlock(lines: string[], bi: number): React.ReactNode {
+  const rows = lines.filter((l) => !isSeparatorRow(l));
+  if (!rows.length) return null;
+  const parsed = rows.map(parseTableRow);
+  const [header, ...body] = parsed;
+  return (
+    <div key={bi} className={cn('mt-2 overflow-x-auto rounded-lg border border-border', bi > 0 && 'mt-3')}>
+      <table className="w-full min-w-[280px] border-collapse text-[0.88rem]">
+        <thead>
+          <tr className="border-b border-border bg-surface-sunk">
+            {header.map((cell, ci) => (
+              <th key={ci} className="px-3 py-2 text-left font-semibold text-ink">
+                {renderInline(cell, `th${bi}-${ci}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((row, ri) => (
+            <tr key={ri} className="border-b border-border last:border-0">
+              {row.map((cell, ci) => (
+                <td key={ci} className="px-3 py-2 align-top text-ink-2">
+                  {renderInline(cell, `td${bi}-${ri}-${ci}`)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function renderContent(content: string): React.ReactNode {
   const blocks = content.trim().split(/\n{2,}/);
   return blocks.map((block, bi) => {
     const lines = block.split('\n');
+
+    if (isTableBlock(lines)) {
+      return renderTableBlock(lines, bi);
+    }
+
+    const sectionHeading = lines.length >= 1 ? /^\*\*([^*]+)\*\*\s*$/.exec(lines[0]) : null;
+    if (sectionHeading && lines.length > 1) {
+      const rest = lines.slice(1);
+      const isUL = rest.every((l) => /^\s*[-*•]\s+/.test(l));
+      return (
+        <div key={bi} className={cn(bi > 0 && 'mt-3')}>
+          <p className="mb-1.5 font-semibold text-primary">{sectionHeading[1]}</p>
+          {isUL ? (
+            <ul className="list-disc space-y-1 pl-5">
+              {rest.map((l, li) => (
+                <li key={li}>{renderInline(l.replace(/^\s*[-*•]\s+/, ''), `sh${bi}-${li}`)}</li>
+              ))}
+            </ul>
+          ) : (
+            rest.map((l, li) => (
+              <p key={li} className={cn(li > 0 && 'mt-1.5')}>
+                {renderInline(l, `sp${bi}-${li}`)}
+              </p>
+            ))
+          )}
+        </div>
+      );
+    }
+
+    const singleLineBold = lines.length === 1 ? /^\*\*([^*]+)\*\*\s*$/.exec(lines[0]) : null;
+    if (singleLineBold) {
+      return (
+        <p key={bi} className={cn('font-semibold text-primary', bi > 0 && 'mt-3')}>
+          {singleLineBold[1]}
+        </p>
+      );
+    }
 
     const heading = lines.length === 1 ? /^(#{1,3})\s+(.*)$/.exec(lines[0]) : null;
     if (heading) {

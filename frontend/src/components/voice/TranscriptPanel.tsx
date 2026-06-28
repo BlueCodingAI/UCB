@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl';
 import { User as UserIcon, Bot } from 'lucide-react';
 import type { Citation } from '@/lib/types';
 import { FallbackNotice } from '@/components/chat/FallbackNotice';
-import { CitationStrip } from '@/components/chat/CitationChip';
+import { MessageBubble } from '@/components/chat/MessageBubble';
 
 /**
  * Shows the recognised user transcript and the bot's answer (or a fallback
@@ -51,12 +51,16 @@ export function TranscriptPanel({
             officialLabel={tc('officialSource')}
           />
         ) : (
-          <>
-            <p className="rounded-2xl rounded-tl-md border border-border bg-surface px-4 py-3 text-[0.95rem] leading-relaxed text-ink shadow-xs">
-              {answer}
-            </p>
-            <CitationStrip citations={citations ?? []} sourceLabel={tChat('source')} />
-          </>
+          <MessageBubble
+            message={{
+              role: 'assistant',
+              content: answer,
+              citations: citations ?? [],
+              isGrounded: true,
+              isFallback: false,
+            }}
+            sourceLabel={tChat('source')}
+          />
         )}
       </div>
     </div>
