@@ -3,6 +3,13 @@ import * as XLSX from 'xlsx';
 import { extractPdfText } from './pdfExtract';
 import { downloadGoogleSheetToFile } from './googleSheet';
 import {
+  isCapMatrixContent,
+  parseCapMatrixFromText,
+  formatCapMatrixRecord,
+  recordSourceLocator,
+} from './capMatrixParser';
+import { parseCapMatrixSpreadsheet } from './capMatrixSpreadsheet';
+import {
   chunkStructuredText,
   buildEmbeddingText,
   estimateTokens,
@@ -95,6 +102,40 @@ export function prepareIndexChunks(raw: string, doc: KbDocMeta): Array<{
   sourceLocator: string;
   tokenCount: number;
 }> {
+  const isSpreadsheet =
+    doc.file_path != null &&
+    fs.existsSync(doc.file_path) &&
+    /\.(xlsx|xls|csv)$/i.test(doc.file_path);
+
+  let capRecords = isSpreadsheet && doc.file_path
+    ? parseCapMatrixSpreadsheet(doc.file_path)
+    : [];
+
+  if (!capRecords.length && isCapMatrixContent(raw, doc.title)) {
+    capRecords = parseCapMatrixFromText(raw);
+  }
+
+  const useCapRecords =
+    capRecords.length >= (isSpreadsheet ? 1 : 2);
+
+  if (useCapRecords) {
+    return capRecords.map((r) => {
+      const body = formatCapMatrixRecord(r, doc.title);
+      return {
+        body,
+        embedText: buildEmbeddingText({
+          title: doc.title,
+          topic: doc.topic,
+          course: doc.course,
+          capYear: doc.cap_year,
+          body,
+        }),
+        sourceLocator: recordSourceLocator(r),
+        tokenCount: estimateTokens(body),
+      };
+    });
+  }
+
   const structured: StructuredChunk[] = chunkStructuredText(raw);
   if (!structured.length && raw.trim()) {
     structured.push({ content: raw.trim(), sourceLocator: 'document' });

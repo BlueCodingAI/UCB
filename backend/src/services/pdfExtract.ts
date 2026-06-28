@@ -106,6 +106,47 @@ function looksLikeTable(lines: TextItem[][]): boolean {
   return multiColRows >= TABLE_MIN_ROWS;
 }
 
+/** CAP seat matrices use nested headers, merged PWD/DEF rows, and G/L sub-columns. */
+function isComplexTableBlock(lines: TextItem[][]): boolean {
+  const texts = lines.map((l) => lineText(l));
+  const joined = texts.join(' ');
+  if (
+    /common\s*reserved|state\s*level|tuition\s*fee\s*waiver|\bTFWS\b|\bEWS\b|\bPWD\b|\bDEF\b|sanctioned\s*intake|\bSI\b.*\bMS\b/i.test(
+      joined,
+    )
+  ) {
+    return true;
+  }
+  const cellCounts = lines.map((l) => lineToCells(l).length).filter((n) => n > 0);
+  if (cellCounts.length < 2) return false;
+  const max = Math.max(...cellCounts);
+  const min = Math.min(...cellCounts);
+  if (max >= 6 && max - min >= 3) return true;
+  const distinct = new Set(cellCounts.filter((n) => n >= 2));
+  return distinct.size >= 3 && max >= 5;
+}
+
+function formatLineDumpBlock(lines: TextItem[][]): string {
+  return lines
+    .map((l) => lineText(l))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function formatInstituteProse(text: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^(\d{5})\s*[-–—]\s*(.+)$/);
+    if (m) {
+      out.push(`=== Institute ${m[1]} ===`, m[2].trim());
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join('\n');
+}
+
 function formatTableBlock(lines: TextItem[][]): string {
   const rows = lines.map((l) => lineToCells(l)).filter((r) => r.some(Boolean));
   if (!rows.length) return '';
@@ -162,10 +203,15 @@ function renderPage(pageNum: number, blocks: PageBlock[]): string {
   const parts: string[] = [`[Page ${pageNum}]`];
   for (const b of blocks) {
     if (b.kind === 'table' && b.lines) {
-      const table = formatTableBlock(b.lines);
-      if (table) parts.push(table);
+      if (isComplexTableBlock(b.lines)) {
+        const dump = formatLineDumpBlock(b.lines);
+        if (dump) parts.push(dump);
+      } else {
+        const table = formatTableBlock(b.lines);
+        if (table) parts.push(table);
+      }
     } else if (b.text?.trim()) {
-      parts.push(b.text.trim());
+      parts.push(formatInstituteProse(b.text.trim()));
     }
   }
   return parts.join('\n\n');
