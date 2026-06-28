@@ -6,6 +6,7 @@ import { env, integrations } from '../config/env';
 import { logger } from '../lib/logger';
 import { TtlCache } from './cache';
 import { getSetting, setSetting, getFallbackMessage } from './settings';
+import { buildQueryEmbeddingText } from './textChunker';
 import type { Locale } from '../types';
 
 let _client: OpenAI | null = null;
@@ -124,6 +125,11 @@ export async function embed(text: string): Promise<Float32Array> {
   return vec;
 }
 
+/** Embed a user question for KB retrieval (domain-prefixed, symmetric with index embeddings). */
+export async function embedQuery(englishQuery: string): Promise<Float32Array> {
+  return embed(buildQueryEmbeddingText(englishQuery));
+}
+
 /** Embed a batch of texts (used during indexing). */
 export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
   if (!integrations.openaiEnabled) return texts.map(devEmbed);
@@ -139,7 +145,10 @@ export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
 
 function buildContext(chunks: RetrievedChunk[]): string {
   return chunks
-    .map((c, i) => `[#${i + 1} | ${c.title}${c.sourceLocator ? ` · ${c.sourceLocator}` : ''}]\n${c.content}`)
+    .map(
+      (c, i) =>
+        `[Excerpt ${i + 1}]\nSource: ${c.title}${c.sourceLocator ? ` (${c.sourceLocator})` : ''}\n${c.content}`,
+    )
     .join('\n\n---\n\n');
 }
 
@@ -173,7 +182,7 @@ export async function generateAnswer(
   const res = await client().chat.completions.create({
     model: env.openaiChatModel,
     temperature: 0.1,
-    max_tokens: 900,
+    max_tokens: 1400,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: question },
@@ -210,7 +219,7 @@ export async function* generateAnswerStream(
   const stream = await client().chat.completions.create({
     model: env.openaiChatModel,
     temperature: 0.1,
-    max_tokens: 900,
+    max_tokens: 1400,
     stream: true,
     messages: [
       { role: 'system', content: system },

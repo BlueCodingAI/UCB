@@ -89,13 +89,33 @@ export interface RetrieveOpts {
   minScore: number;
 }
 
+/** Significant query tokens for FTS and lexical re-ranking. */
+function queryTokens(queryText: string): string[] {
+  const cleaned = queryText.replace(/["'^*]/g, ' ').trim().toLowerCase();
+  if (!cleaned) return [];
+  const stop = new Set([
+    'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'any', 'can', 'was', 'our', 'out',
+    'has', 'have', 'had', 'how', 'what', 'when', 'where', 'which', 'who', 'why', 'this', 'that',
+    'with', 'from', 'about', 'into', 'your', 'their', 'there', 'will', 'would', 'should', 'could',
+    'maharashtra', 'cap', 'admission', 'process', 'centralised', 'centralized',
+  ]);
+  return [...new Set(cleaned.split(/\s+/).filter((t) => t.length > 1 && !stop.has(t)))].slice(0, 16);
+}
+
+/** Fraction of query tokens found in chunk content (0..1). */
+function lexicalOverlap(queryText: string, content: string): number {
+  const tokens = queryTokens(queryText);
+  if (!tokens.length) return 0;
+  const hay = content.toLowerCase();
+  let hits = 0;
+  for (const t of tokens) if (hay.includes(t)) hits += 1;
+  return hits / tokens.length;
+}
+
 /** FTS5 keyword scores keyed by chunk rowid (normalized 0..~1). */
 function ftsScores(queryText: string): Map<number, number> {
   const scores = new Map<number, number>();
-  const cleaned = queryText.replace(/["'^*]/g, ' ').trim();
-  if (!cleaned) return scores;
-  // Build a tolerant OR query of the significant tokens.
-  const tokens = cleaned.split(/\s+/).filter((t) => t.length > 1).slice(0, 12);
+  const tokens = queryTokens(queryText);
   if (!tokens.length) return scores;
   const match = tokens.map((t) => `"${t}"`).join(' OR ');
   try {
@@ -137,9 +157,9 @@ export function retrieve(queryVec: Float32Array, queryText: string, opts: Retrie
   const scored = cache.map((c) => {
     const cos = dot(queryVec, c.vec); // unit vectors → cosine
     const kw = fts.get(c.rowid) ?? 0;
-    // Weighted hybrid: semantic-led, keyword as a strong precision boost. Tuned
-    // for text-embedding-3-small, whose relevant cosines sit ~0.30–0.55.
-    let score = 0.6 * cos + 0.4 * kw;
+    const lex = lexicalOverlap(queryText, c.content);
+    // Semantic + keyword + lexical overlap (helps CAP terms, institute codes, dates).
+    let score = 0.52 * cos + 0.28 * kw + 0.2 * lex;
     // Soft preferences (ranking only, never exclusion): de-prioritise off-course
     // and off-cycle chunks so current-year / on-course material wins ties.
     if (opts.course && c.course && c.course !== opts.course) score *= 0.9;
@@ -167,6 +187,24 @@ export function retrieve(queryVec: Float32Array, queryText: string, opts: Retrie
     sourceLocator: s.c.sourceLocator,
     score: Number(s.score.toFixed(4)),
   }));
+}
+
+/** Merge two retrieval lists, keeping the best score per chunk. */
+export function fuseRetrievalResults(
+  a: RetrievedChunk[],
+  b: RetrievedChunk[],
+  topK: number,
+  minScore: number,
+): RetrievedChunk[] {
+  const map = new Map<string, RetrievedChunk>();
+  for (const c of [...a, ...b]) {
+    const prev = map.get(c.chunkId);
+    if (!prev || c.score > prev.score) map.set(c.chunkId, c);
+  }
+  return [...map.values()]
+    .sort((x, y) => y.score - x.score)
+    .filter((c) => c.score >= minScore)
+    .slice(0, topK);
 }
 
 export function vectorCacheSize(): number {

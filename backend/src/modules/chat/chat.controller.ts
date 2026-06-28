@@ -2,24 +2,13 @@ import type { Request, Response } from 'express';
 import { ok, created, noContent } from '../../lib/response';
 import { logger } from '../../lib/logger';
 import {
-  embed,
   generateAnswerStream,
   detectAndTranslate,
   answerFromDocsStream,
   type RetrievedChunk,
 } from '../../services/openai';
-import { retrieve } from '../../services/vectorStore';
-import {
-  getFallbackMessage,
-  getRagTopK,
-  getRagMinScore,
-  getSetting,
-  isFallbackAnswer,
-} from '../../services/settings';
-import { effectivePlan } from '../../middleware/auth';
-import { db } from '../../db/connection';
-import { env } from '../../config/env';
-import { answerQuestion, getDocPlan, buildDocCitations } from './rag.service';
+import { getFallbackMessage, isFallbackAnswer } from '../../services/settings';
+import { answerQuestion, getDocPlan, buildDocCitations, retrieveForQuestion, prefersDocEngine } from './rag.service';
 import {
   listSessions,
   createSession,
@@ -107,18 +96,6 @@ export async function postMessage(req: Request, res: Response): Promise<void> {
 
 // ---- POST /chat/sessions/:id/messages/stream (SSE) ------------------------
 
-interface ProfileRow {
-  course_interest: string | null;
-}
-
-function resolveCourse(userId: string): string | null {
-  if (effectivePlan(userId) === 'freemium') return null;
-  const row = db
-    .prepare('SELECT course_interest FROM user_profiles WHERE user_id = ?')
-    .get(userId) as ProfileRow | undefined;
-  return row?.course_interest ?? null;
-}
-
 export async function streamMessage(req: Request, res: Response): Promise<void> {
   const userId = req.auth!.sub;
   const sessionId = req.params.id;
@@ -148,11 +125,16 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
   };
 
   try {
-    // Preferred path: stream from the OpenAI document engine (full PDF/table
-    // understanding of the uploaded files). Falls through to the local RAG path
-    // only if the engine is inactive or fails before emitting any output.
     const plan = getDocPlan();
-    if (plan.active) {
+    const retrieved: RetrievedChunk[] = await retrieveForQuestion({
+      englishQuery,
+      language,
+      userId,
+    });
+    const topScore = retrieved[0]?.score ?? 0;
+
+    const streamDocEngine = async (): Promise<boolean> => {
+      if (!plan.active) return false;
       let sentAny = false;
       try {
         const gen = answerFromDocsStream({
@@ -173,27 +155,17 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
         const r = next.value;
         fullText = r.content || fullText;
 
-        let isFallback = false;
-        let citations: CitationDTO[] = [];
-        let retrievalScore = 1;
-        if (!fullText || isFallbackAnswer(fullText)) {
-          isFallback = true;
-          fullText = getFallbackMessage(language);
-          retrievalScore = 0;
-          if (!sentAny) send({ delta: fullText });
-        } else {
-          citations = buildDocCitations(r, plan);
-        }
+        if (!fullText || isFallbackAnswer(fullText)) return false;
 
         const assistantMessage = persistAssistantTurn({
           sessionId,
           userId,
           content: fullText,
           language,
-          isGrounded: !isFallback,
-          isFallback,
-          citations,
-          retrievalScore,
+          isGrounded: true,
+          isFallback: false,
+          citations: buildDocCitations(r, plan),
+          retrievalScore: 1,
           model: r.model,
           promptTokens: r.promptTokens,
           completionTokens: r.completionTokens,
@@ -202,104 +174,144 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
         });
         send({ done: true, message: assistantMessage });
         res.end();
-        return;
+        return true;
       } catch (err) {
         logger.error({ err, sessionId }, 'doc engine stream failed');
         if (sentAny) {
-          try {
-            send({ error: 'stream_failed' });
-          } catch {
-            /* ignore */
-          }
+          send({ error: 'stream_failed' });
           res.end();
-          return;
+          return true;
         }
-        // Nothing streamed yet → fall through to the local RAG path below.
+        return false;
       }
-    }
+    };
 
-    // Retrieve once (mirrors rag.service path so streaming + persistence agree).
-    const queryVec = await embed(englishQuery);
-    const retrieved: RetrievedChunk[] = retrieve(queryVec, englishQuery, {
-      language,
-      course: resolveCourse(userId),
-      capYear: getSetting<number>('current_cap_year', env.currentCapYear),
-      topK: getRagTopK(),
-      minScore: getRagMinScore(),
-    });
+    const streamLocal = async (chunks: RetrievedChunk[]): Promise<void> => {
+      let fullText = '';
+      let model = 'fallback';
+      let promptTokens = 0;
+      let completionTokens = 0;
+      let isFallback = false;
+      let citations: CitationDTO[] = [];
+      let sourceChunks: { chunkId: string; documentId: string; score: number }[] = [];
+      let retrievalScore = 0;
 
-    let fullText = '';
-    let model = 'fallback';
-    let promptTokens = 0;
-    let completionTokens = 0;
-    let isFallback: boolean;
-    let citations: CitationDTO[] = [];
-    let sourceChunks: { chunkId: string; documentId: string; score: number }[] = [];
-    let retrievalScore = 0;
+      if (chunks.length === 0) {
+        isFallback = true;
+        fullText = getFallbackMessage(language);
+        send({ delta: fullText });
+      } else {
+        retrievalScore = chunks[0].score;
+        citations = chunks.map((c) => ({
+          documentId: c.documentId,
+          chunkId: c.chunkId,
+          title: c.title,
+          sourceLocator: c.sourceLocator,
+          score: c.score,
+        }));
+        sourceChunks = chunks.map((c) => ({
+          chunkId: c.chunkId,
+          documentId: c.documentId,
+          score: c.score,
+        }));
 
-    if (retrieved.length === 0) {
-      // KB miss: stream the fixed fallback string, no LLM call.
-      isFallback = true;
-      fullText = getFallbackMessage(language);
-      send({ delta: fullText });
-    } else {
-      isFallback = false;
-      retrievalScore = retrieved[0].score;
-      citations = retrieved.map((c) => ({
-        documentId: c.documentId,
-        chunkId: c.chunkId,
-        title: c.title,
-        sourceLocator: c.sourceLocator,
-        score: c.score,
-      }));
-      sourceChunks = retrieved.map((c) => ({
-        chunkId: c.chunkId,
-        documentId: c.documentId,
-        score: c.score,
-      }));
-      // Generate against the English-normalised query (EN-parity), answer in language.
+        const gen = generateAnswerStream(englishQuery, chunks, language);
+        let next = await gen.next();
+        while (!next.done) {
+          fullText += next.value;
+          send({ delta: next.value });
+          next = await gen.next();
+        }
+        const result = next.value;
+        fullText = result.content || fullText;
+        model = result.model;
+        promptTokens = result.promptTokens;
+        completionTokens = result.completionTokens;
+
+        if (isFallbackAnswer(fullText)) {
+          isFallback = true;
+          fullText = getFallbackMessage(language);
+          citations = [];
+          sourceChunks = [];
+          retrievalScore = 0;
+        }
+      }
+
+      const assistantMessage = persistAssistantTurn({
+        sessionId,
+        userId,
+        content: fullText,
+        language,
+        isGrounded: !isFallback,
+        isFallback,
+        citations,
+        retrievalScore,
+        model,
+        promptTokens,
+        completionTokens,
+        sourceChunks,
+        firstUserContent: session.title ? '' : content,
+      });
+      send({ done: true, message: assistantMessage });
+      res.end();
+    };
+
+    // Local-first when retrieval is confident (matches rag.service).
+    if (retrieved.length > 0 && topScore >= 0.32) {
+      let fullText = '';
       const gen = generateAnswerStream(englishQuery, retrieved, language);
       let next = await gen.next();
       while (!next.done) {
-        const delta = next.value;
-        fullText += delta;
-        send({ delta });
+        fullText += next.value;
+        send({ delta: next.value });
         next = await gen.next();
       }
       const result = next.value;
       fullText = result.content || fullText;
-      model = result.model;
-      promptTokens = result.promptTokens;
-      completionTokens = result.completionTokens;
-
-      // If the model emitted the KB-miss fallback, flag it as a fallback turn.
-      if (isFallbackAnswer(fullText)) {
-        isFallback = true;
-        fullText = getFallbackMessage(language);
-        citations = [];
-        sourceChunks = [];
-        retrievalScore = 0;
+      if (!isFallbackAnswer(fullText)) {
+        const assistantMessage = persistAssistantTurn({
+          sessionId,
+          userId,
+          content: fullText,
+          language,
+          isGrounded: true,
+          isFallback: false,
+          citations: retrieved.map((c) => ({
+            documentId: c.documentId,
+            chunkId: c.chunkId,
+            title: c.title,
+            sourceLocator: c.sourceLocator,
+            score: c.score,
+          })),
+          retrievalScore: topScore,
+          model: result.model,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
+          sourceChunks: retrieved.map((c) => ({
+            chunkId: c.chunkId,
+            documentId: c.documentId,
+            score: c.score,
+          })),
+          firstUserContent: session.title ? '' : content,
+        });
+        send({ done: true, message: assistantMessage });
+        res.end();
+        return;
       }
     }
 
-    const assistantMessage = persistAssistantTurn({
-      sessionId,
-      userId,
-      content: fullText,
-      language,
-      isGrounded: !isFallback,
-      isFallback,
-      citations,
-      retrievalScore,
-      model,
-      promptTokens,
-      completionTokens,
-      sourceChunks,
-      firstUserContent: session.title ? '' : content,
-    });
+    if (plan.active && (prefersDocEngine(content, topScore) || retrieved.length === 0)) {
+      if (await streamDocEngine()) return;
+    }
 
-    send({ done: true, message: assistantMessage });
-    res.end();
+    if (retrieved.length === 0) {
+      if (await streamDocEngine()) return;
+      await streamLocal([]);
+      return;
+    }
+
+    if (await streamDocEngine()) return;
+    await streamLocal(retrieved);
   } catch (err) {
     logger.error({ err, sessionId }, 'chat stream failed');
     // Best-effort error event; headers already sent so we cannot use the

@@ -112,8 +112,8 @@ export const env = {
   // are often only 0.30–0.45); the strict GROUNDING_PROMPT + exact-fallback gate
   // are the real backstop against off-topic context, so a low floor maximises
   // recall (finds info that IS in the KB) without weakening KB-only grounding.
-  ragTopK: num('RAG_TOP_K', 8),
-  ragMinScore: num('RAG_MIN_SCORE', 0.2),
+  ragTopK: num('RAG_TOP_K', 10),
+  ragMinScore: num('RAG_MIN_SCORE', 0.18),
 
   // Ops
   seasonMode: bool('SEASON_MODE', false),

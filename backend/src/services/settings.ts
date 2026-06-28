@@ -55,13 +55,13 @@ export function getRagMinScore(): number {
  */
 export function reconcileRagDefaults(): void {
   const VERSION_KEY = 'rag_tuning_version';
-  const TARGET = 2;
+  const TARGET = 3;
   if (getSetting<number>(VERSION_KEY, 0) >= TARGET) return;
   setSetting('rag_min_score', env.ragMinScore, 'Minimum hybrid relevance score');
   setSetting('rag_top_k', env.ragTopK, 'Top-K chunks for retrieval');
   setSetting(VERSION_KEY, TARGET, 'RAG tuning defaults version (auto-applied on boot)');
   logger.info(
-    { ragMinScore: env.ragMinScore, ragTopK: env.ragTopK },
+    { ragMinScore: env.ragMinScore, ragTopK: env.ragTopK, version: TARGET },
     'rag tuning defaults reconciled',
   );
 }

@@ -1,15 +1,15 @@
 import {
   embed,
+  embedQuery,
   generateAnswer,
   detectAndTranslate,
   answerFromDocs,
   getVectorStoreId,
   type RetrievedChunk,
-  type DocAnswerMode,
   type DocAnswerResult,
   type DocSource,
 } from '../../services/openai';
-import { retrieve } from '../../services/vectorStore';
+import { retrieve, fuseRetrievalResults } from '../../services/vectorStore';
 import {
   getFallbackMessage,
   getRagTopK,
@@ -25,7 +25,6 @@ import type { CitationDTO, Locale } from '../../types';
 
 export interface AnswerResult {
   content: string;
-  /** The auto-detected language of the question (also the answer language). */
   language: Locale;
   citations: CitationDTO[];
   isFallback: boolean;
@@ -40,10 +39,6 @@ interface ProfileRow {
   course_interest: string | null;
 }
 
-/**
- * Resolve the course filter from the user's saved profile, but only for
- * premium (or higher) users. Anonymous / freemium users get no course filter.
- */
 function resolveCourse(userId: string | null | undefined): string | null {
   if (!userId) return null;
   const plan = effectivePlan(userId);
@@ -54,24 +49,15 @@ function resolveCourse(userId: string | null | undefined): string | null {
   return row?.course_interest ?? null;
 }
 
-// ---- OpenAI document engine (hybrid: whole-file vs file_search) ------------
-
 export interface DocPlan {
   active: boolean;
-  mode: DocAnswerMode;
+  mode: import('../../services/openai').DocAnswerMode;
   sources: DocSource[];
   vectorStoreId: string | null;
 }
 
 const INACTIVE_PLAN: DocPlan = { active: false, mode: 'file_search', sources: [], vectorStoreId: null };
 
-/**
- * Decide whether (and how) to answer via the OpenAI document engine. Whole-file
- * mode (the model reads the entire source — sees ALL table rows) is used while the
- * active KB fits the char budget; beyond that we use file_search retrieval. Falls
- * back to the local RAG (returns active:false) when the engine is off, no docs are
- * uploaded, or the KB is too big with no vector store.
- */
 export function getDocPlan(): DocPlan {
   if (!integrations.openaiDocsEnabled) return INACTIVE_PLAN;
   const rows = db
@@ -96,10 +82,9 @@ export function getDocPlan(): DocPlan {
     return { active: true, mode: 'whole_file', sources, vectorStoreId };
   }
   if (vectorStoreId) return { active: true, mode: 'file_search', sources, vectorStoreId };
-  return INACTIVE_PLAN; // too big for whole-file and no vector store → use local RAG
+  return INACTIVE_PLAN;
 }
 
-/** Map the engine's cited files (or the in-scope docs) to citation chips. */
 export function buildDocCitations(result: DocAnswerResult, plan: DocPlan): CitationDTO[] {
   const byFile = new Map(plan.sources.map((s) => [s.fileId, s]));
   let cited: DocSource[];
@@ -117,7 +102,6 @@ export function buildDocCitations(result: DocAnswerResult, plan: DocPlan): Citat
   }));
 }
 
-/** The localized KB-miss fallback as an AnswerResult (no citations, no LLM cost claimed). */
 export function fallbackResult(
   language: Locale,
   model = 'fallback',
@@ -137,124 +121,157 @@ export function fallbackResult(
   };
 }
 
-/**
- * Strict KB-grounded answer. Prefers the OpenAI document engine (full-document /
- * file_search understanding of the uploaded files) when available; otherwise
- * falls back to the local embedded-chunk RAG. Persists nothing.
- */
-export async function answerQuestion(params: {
-  question: string;
-  /** Optional hint; ignored — the language is auto-detected from the question. */
-  language?: Locale;
+/** Dual embedding retrieval: domain-prefixed + raw query, fused and de-duplicated. */
+export async function retrieveForQuestion(params: {
+  englishQuery: string;
+  language: Locale;
   userId?: string | null;
-}): Promise<AnswerResult> {
-  const { question, userId } = params;
+}): Promise<RetrievedChunk[]> {
+  const topK = getRagTopK();
+  const minScore = getRagMinScore();
+  const poolK = Math.min(topK * 2, 20);
 
-  // Auto-detect the question's language and get an English version for retrieval.
-  // The KB is English; we match against it in English, then answer in the detected
-  // language. No language selector needed.
-  const { language, englishQuery } = await detectAndTranslate(question);
+  const [vecPrefixed, vecRaw] = await Promise.all([
+    embedQuery(params.englishQuery),
+    embed(params.englishQuery),
+  ]);
 
-  // Preferred path: OpenAI document engine (best PDF/table understanding).
-  const plan = getDocPlan();
-  if (plan.active) {
-    try {
-      const docRes = await answerFromDocs({
-        question,
-        language,
-        mode: plan.mode,
-        sources: plan.sources,
-        vectorStoreId: plan.vectorStoreId,
-      });
-      if (!docRes.content || isFallbackAnswer(docRes.content)) {
-        return fallbackResult(language, docRes.model, docRes.promptTokens, docRes.completionTokens);
-      }
-      return {
-        content: docRes.content,
-        language,
-        citations: buildDocCitations(docRes, plan),
-        isFallback: false,
-        retrievalScore: 1,
-        model: docRes.model,
-        promptTokens: docRes.promptTokens,
-        completionTokens: docRes.completionTokens,
-        sourceChunks: [],
-      };
-    } catch (err) {
-      logger.error({ err }, 'doc engine answer failed; falling back to local RAG');
-      // fall through to the local RAG path below
-    }
-  }
+  const baseOpts = {
+    language: params.language,
+    course: resolveCourse(params.userId),
+    capYear: getSetting<number>('current_cap_year', env.currentCapYear),
+    topK: poolK,
+    minScore: minScore * 0.75,
+  };
 
-  const queryVec = await embed(englishQuery);
+  const fromPrefixed = retrieve(vecPrefixed, params.englishQuery, baseOpts);
+  const fromRaw = retrieve(vecRaw, params.englishQuery, baseOpts);
+  return fuseRetrievalResults(fromPrefixed, fromRaw, topK, minScore);
+}
 
-  const course = resolveCourse(userId);
-  const capYear = getSetting<number>('current_cap_year', env.currentCapYear);
-
-  const retrieved: RetrievedChunk[] = retrieve(queryVec, englishQuery, {
-    language,
-    course,
-    capYear,
-    topK: getRagTopK(),
-    minScore: getRagMinScore(),
-  });
-
-  // Golden rule: nothing above the floor → fixed fallback, no LLM call.
-  if (retrieved.length === 0) {
-    return {
-      content: getFallbackMessage(language),
-      language,
-      citations: [],
-      isFallback: true,
-      retrievalScore: 0,
-      model: 'fallback',
-      promptTokens: 0,
-      completionTokens: 0,
-      sourceChunks: [],
-    };
-  }
-
-  // Generate against the English-normalised question (EN-parity grounding) but
-  // answer in the detected language.
-  const result = await generateAnswer(englishQuery, retrieved, language);
-
-  // The model may still emit the KB-miss fallback when the context doesn't cover
-  // the question — surface that as a proper fallback (no citations).
-  if (isFallbackAnswer(result.content)) {
-    return {
-      content: getFallbackMessage(language),
-      language,
-      citations: [],
-      isFallback: true,
-      retrievalScore: retrieved[0]?.score ?? 0,
-      model: result.model,
-      promptTokens: result.promptTokens,
-      completionTokens: result.completionTokens,
-      sourceChunks: [],
-    };
-  }
-
-  const citations: CitationDTO[] = retrieved.map((c) => ({
+function toCitations(retrieved: RetrievedChunk[]): CitationDTO[] {
+  return retrieved.map((c) => ({
     documentId: c.documentId,
     chunkId: c.chunkId,
     title: c.title,
     sourceLocator: c.sourceLocator,
     score: c.score,
   }));
+}
 
+function toSourceChunks(retrieved: RetrievedChunk[]) {
+  return retrieved.map((c) => ({
+    chunkId: c.chunkId,
+    documentId: c.documentId,
+    score: c.score,
+  }));
+}
+
+function buildLocalAnswer(
+  language: Locale,
+  retrieved: RetrievedChunk[],
+  result: { content: string; model: string; promptTokens: number; completionTokens: number },
+  isFallback: boolean,
+): AnswerResult {
   return {
-    content: result.content,
+    content: isFallback ? getFallbackMessage(language) : result.content,
     language,
-    citations,
-    isFallback: false,
-    retrievalScore: retrieved[0].score,
+    citations: isFallback ? [] : toCitations(retrieved),
+    isFallback,
+    retrievalScore: isFallback ? 0 : retrieved[0]?.score ?? 0,
     model: result.model,
     promptTokens: result.promptTokens,
     completionTokens: result.completionTokens,
-    sourceChunks: retrieved.map((c) => ({
-      chunkId: c.chunkId,
-      documentId: c.documentId,
-      score: c.score,
-    })),
+    sourceChunks: isFallback ? [] : toSourceChunks(retrieved),
   };
+}
+
+/** Questions that benefit from OpenAI's native PDF/table engine. */
+export function prefersDocEngine(question: string, topScore: number): boolean {
+  if (topScore >= 0.38) return false;
+  const q = question.toLowerCase();
+  return /institute|college|intake|fee|fees|seat|table|list|schedule|code|category|cut.?off|merit|allotment|option\s*form|round\s*\d|pdf|document|brochure|sanctioned/.test(
+    q,
+  );
+}
+
+async function tryDocEngine(params: {
+  question: string;
+  language: Locale;
+  plan: DocPlan;
+}): Promise<AnswerResult | null> {
+  if (!params.plan.active) return null;
+  try {
+    const docRes = await answerFromDocs({
+      question: params.question,
+      language: params.language,
+      mode: params.plan.mode,
+      sources: params.plan.sources,
+      vectorStoreId: params.plan.vectorStoreId,
+    });
+    if (!docRes.content || isFallbackAnswer(docRes.content)) return null;
+    return {
+      content: docRes.content,
+      language: params.language,
+      citations: buildDocCitations(docRes, params.plan),
+      isFallback: false,
+      retrievalScore: 1,
+      model: docRes.model,
+      promptTokens: docRes.promptTokens,
+      completionTokens: docRes.completionTokens,
+      sourceChunks: [],
+    };
+  } catch (err) {
+    logger.error({ err }, 'doc engine answer failed');
+    return null;
+  }
+}
+
+/**
+ * Strict KB-grounded answer. Uses improved local chunk RAG first; escalates to
+ * the OpenAI document engine for table/PDF-heavy or low-confidence queries.
+ */
+export async function answerQuestion(params: {
+  question: string;
+  language?: Locale;
+  userId?: string | null;
+}): Promise<AnswerResult> {
+  const { question, userId } = params;
+  const { language, englishQuery } = await detectAndTranslate(question);
+  const plan = getDocPlan();
+
+  const retrieved = await retrieveForQuestion({ englishQuery, language, userId });
+  const topScore = retrieved[0]?.score ?? 0;
+
+  // Strong local retrieval → answer from improved chunks (primary path after re-index).
+  if (retrieved.length > 0 && topScore >= 0.32) {
+    const result = await generateAnswer(englishQuery, retrieved, language);
+    if (!isFallbackAnswer(result.content)) {
+      return buildLocalAnswer(language, retrieved, result, false);
+    }
+  }
+
+  // Low confidence or table-heavy → try OpenAI document engine (native PDF parsing).
+  if (plan.active && (prefersDocEngine(question, topScore) || retrieved.length === 0)) {
+    const docAnswer = await tryDocEngine({ question, language, plan });
+    if (docAnswer) return docAnswer;
+  }
+
+  // KB miss at retrieval layer.
+  if (retrieved.length === 0) {
+    // Last attempt: doc engine even for generic questions if local found nothing.
+    const docAnswer = await tryDocEngine({ question, language, plan });
+    if (docAnswer) return docAnswer;
+    return fallbackResult(language);
+  }
+
+  // Have chunks but model declined — still grounded attempt before final fallback.
+  const result = await generateAnswer(englishQuery, retrieved, language);
+  if (isFallbackAnswer(result.content)) {
+    const docAnswer = await tryDocEngine({ question, language, plan });
+    if (docAnswer) return docAnswer;
+    return buildLocalAnswer(language, retrieved, result, true);
+  }
+
+  return buildLocalAnswer(language, retrieved, result, false);
 }
