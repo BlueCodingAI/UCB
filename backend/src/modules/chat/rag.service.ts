@@ -28,6 +28,7 @@ import {
   filterDocSources,
   type QueryAnalysis,
 } from '../../services/queryAnalysis';
+import { tryStructuredInstituteAnswer } from '../../services/capMatrixLookup';
 import { effectivePlan } from '../../middleware/auth';
 import { db } from '../../db/connection';
 import { env, integrations } from '../../config/env';
@@ -235,7 +236,7 @@ async function tryDocEngine(params: {
 }): Promise<AnswerResult | null> {
   if (!params.plan.active) return null;
 
-  const sources = filterDocSources(params.plan.sources, params.question);
+  const sources = filterDocSources(params.plan.sources, params.question, params.analysis.intent);
   const scopedPlan: DocPlan = { ...params.plan, sources };
 
   // Prefer whole_file when only 1–2 matrix docs (model sees every page/table row).
@@ -286,8 +287,14 @@ export async function answerQuestion(params: {
   const analysis = analyzeQuery(`${question} ${englishQuery}`);
   const plan = getDocPlan();
 
-  // Seat matrix / institute intake → doc engine first (NotebookLM-style full-doc read).
-  if (plan.active && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
+  // Deterministic institute lookup from indexed CAP records (exact numbers, all courses).
+  if (analysis.instituteCodes.length) {
+    const structured = tryStructuredInstituteAnswer({ question, language, analysis });
+    if (structured) return structured;
+  }
+
+  // Seat matrix / institute intake → doc engine when structured KB has no records yet.
+  if (plan.active && analysis.intent === 'seat_matrix' && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
     const docAnswer = await tryDocEngine({ question, language, plan, analysis });
     if (docAnswer) return docAnswer;
   }

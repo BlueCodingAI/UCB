@@ -1,5 +1,6 @@
 import { db } from '../db/connection';
 import { logger } from '../lib/logger';
+import { fetchInstituteChunksFromDb } from './capMatrixLookup';
 import type { Locale } from '../types';
 import type { RetrievedChunk } from './openai';
 
@@ -230,6 +231,22 @@ export function retrieveByInstituteCodes(codes: string[], maxChunks = 40): Retri
         content: c.content,
         sourceLocator: c.sourceLocator,
         score: 0.95,
+      });
+    }
+  }
+
+  // DB fallback when cache is stale or institute chunks were added after last rebuild.
+  if (matched.length === 0) {
+    for (const row of fetchInstituteChunksFromDb(codes)) {
+      if (seen.has(row.chunkId)) continue;
+      seen.add(row.chunkId);
+      matched.push({
+        documentId: row.documentId,
+        chunkId: row.chunkId,
+        title: row.title,
+        content: row.content,
+        sourceLocator: row.sourceLocator,
+        score: 0.98,
       });
     }
   }

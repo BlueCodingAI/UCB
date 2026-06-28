@@ -9,6 +9,7 @@ import {
 } from '../../services/openai';
 import { getFallbackMessage, isFallbackAnswer } from '../../services/settings';
 import { filterDocSources } from '../../services/queryAnalysis';
+import { tryStructuredInstituteAnswer } from '../../services/capMatrixLookup';
 import {
   answerQuestion,
   getDocPlan,
@@ -134,9 +135,35 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
   try {
     const analysis = analyzeQuery(`${content} ${englishQuery}`);
     const plan = getDocPlan();
-    const scopedSources = filterDocSources(plan.sources, content);
+    const scopedSources = filterDocSources(plan.sources, content, analysis.intent);
     const docMode =
       scopedSources.length <= 2 && analysis.isInstituteLookup ? 'whole_file' : plan.mode;
+
+    const streamStructuredInstitute = (): boolean => {
+      if (!analysis.instituteCodes.length) return false;
+      const structured = tryStructuredInstituteAnswer({ question: content, language, analysis });
+      if (!structured) return false;
+
+      send({ delta: structured.content });
+      const assistantMessage = persistAssistantTurn({
+        sessionId,
+        userId,
+        content: structured.content,
+        language,
+        isGrounded: true,
+        isFallback: false,
+        citations: structured.citations,
+        retrievalScore: structured.retrievalScore,
+        model: structured.model,
+        promptTokens: structured.promptTokens,
+        completionTokens: structured.completionTokens,
+        sourceChunks: structured.sourceChunks,
+        firstUserContent: session.title ? '' : content,
+      });
+      send({ done: true, message: assistantMessage });
+      res.end();
+      return true;
+    };
 
     const streamDocEngine = async (): Promise<boolean> => {
       if (!plan.active) return false;
@@ -276,8 +303,10 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
       res.end();
     };
 
-    // Seat matrix / institute → doc engine first (matches rag.service).
-    if (plan.active && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
+    if (streamStructuredInstitute()) return;
+
+    // Seat matrix / institute → doc engine when structured KB has no indexed records.
+    if (plan.active && analysis.intent === 'seat_matrix' && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
       if (await streamDocEngine()) return;
     }
 

@@ -29,6 +29,16 @@ function seatMatrixRules(categoryHint: string | null): string {
 - When an **institute code** (5 digits, e.g. 06217) or institute name is asked, search ALL pages and ALL table rows in the sources for that institute.
 - List **EVERY course/branch** with **sanctioned intake (SI)** for that institute — Computer Science, AI & Data Science, AI & Machine Learning, IT, etc. Do NOT stop after the first course.
 - Scan the full seat matrix PDF/sheet across pages (e.g. page 548 and others) — courses for one institute are often spread across multiple pages.
+- **Understand each number before answering:**
+  • **SI (Sanctioned Intake)** = total approved seats for that course branch (sum across all quotas).
+  • **MS Seats** = Maharashtra State CAP quota seats (state counselling).
+  • **All India Seats** = seats for All India category — NOT the same as OPEN/State Level general seats.
+  • **Minority / Institute Level / Orphan** = separate quota rows in the matrix.
+  • **G / L columns** = General / Ladies sub-split within each reservation category (OPEN, SC, ST, OBC, etc.) at State Level.
+  • **EWS** = Economically Weaker Section seats (often a separate footer row).
+  • **TFWS** = Tuition Fee Waiver Scheme — separate choice code (often ending in T).
+  • **PWD / DEF Common Reserved** = shared disability/defence pool across categories, not per-course duplicates.
+- When asked "sanctioned intake of institute X", report **each course's SI** and the **combined total** if multiple courses exist.
 - For cut-off / admission-chance questions: compare the user's percentile/score against the **correct category column** only. ${cat}
 - Group institutes into HIGH chance vs DIFFICULT when the sources support it; explain briefly using source cut-offs.
 - Present tabular data as bullet points with **bold** course names and intake/seat numbers, or as a Markdown table.`;

@@ -2,10 +2,12 @@
 const INSTITUTE_CODE = /\b(0\d{4})\b/g;
 
 const SEAT_MATRIX =
-  /seat\s*matrix|sanctioned\s*intake|\bintake\b|institute\s*code|cut[\s-]?off|cap\s*round|all\s*india\s*seat|category.*percentile|percentile.*category|engineering\s*cap\s*sheet/i;
+  /seat\s*matrix|sanctioned\s*intak?e?|sanctioned\s*itake|\bitake\b|\binake\b|\bintke\b|institute\s*code|cut[\s-]?off|cap\s*round|all\s*india\s*seat|category.*percentile|percentile.*category|engineering\s*cap\s*sheet|ms\s*seats?|choice\s*code/i;
 
 const INSTITUTE_QUERY =
-  /institute|college|sanctioned|intake|seats?|course|branch|artificial intelligence|computer science|data science|machine learning/i;
+  /institute|college|sanctioned|intak?e?|itake|inake|seats?|course|branch|artificial intelligence|computer science|data science|machine learning|available at|offered at/i;
+
+export type QueryIntent = 'seat_matrix' | 'cutoff' | 'general';
 
 export interface QueryAnalysis {
   instituteCodes: string[];
@@ -13,6 +15,7 @@ export interface QueryAnalysis {
   isInstituteLookup: boolean;
   categoryHint: string | null;
   districtHint: string | null;
+  intent: QueryIntent;
 }
 
 const CATEGORY_PATTERNS: Array<[RegExp, string]> = [
@@ -28,9 +31,26 @@ export function extractInstituteCodes(text: string): string[] {
   return [...new Set(found)];
 }
 
+export function detectQueryIntent(text: string, analysis: Pick<QueryAnalysis, 'instituteCodes' | 'categoryHint'>): QueryIntent {
+  const q = text.toLowerCase();
+  const intakeLike =
+    /sanctioned|intak?e?|itake|inake|seat\s*matrix|ms\s*seat|choice\s*code|course|branch|available|offered|how many seat/.test(
+      q,
+    );
+  const cutoffLike = /cut[\s-]?off|percentile|merit|cap\s*round|admission chance|allotment/.test(q);
+
+  if (analysis.instituteCodes.length && intakeLike && !cutoffLike) return 'seat_matrix';
+  if (cutoffLike) return 'cutoff';
+  if (analysis.instituteCodes.length && intakeLike) return 'seat_matrix';
+  return 'general';
+}
+
 export function analyzeQuery(text: string): QueryAnalysis {
   const instituteCodes = extractInstituteCodes(text);
-  const isSeatMatrix = SEAT_MATRIX.test(text);
+  const isSeatMatrix =
+    SEAT_MATRIX.test(text) ||
+    (instituteCodes.length > 0 &&
+      /sanctioned|intak?e?|itake|inake|seat|course|branch|matrix|available|offered/i.test(text));
   const isInstituteLookup =
     instituteCodes.length > 0 || (INSTITUTE_QUERY.test(text) && isSeatMatrix);
 
@@ -47,12 +67,15 @@ export function analyzeQuery(text: string): QueryAnalysis {
   );
   const districtHint = districtMatch?.[1]?.trim() ?? null;
 
+  const intent = detectQueryIntent(text, { instituteCodes, categoryHint });
+
   return {
     instituteCodes,
     isSeatMatrix,
     isInstituteLookup,
     categoryHint,
     districtHint,
+    intent,
   };
 }
 
@@ -74,14 +97,33 @@ export function expandRetrievalQuery(englishQuery: string, analysis: QueryAnalys
   return parts.join('. ');
 }
 
-/** Filter doc-engine sources to seat-matrix / cut-off docs when the question is matrix-related. */
-export function filterDocSources<T extends { title: string }>(sources: T[], question: string): T[] {
+/** Route doc-engine to the right KB documents (seat matrix vs cut-off vs general). */
+export function filterDocSources<T extends { title: string }>(
+  sources: T[],
+  question: string,
+  intent?: QueryIntent,
+): T[] {
   const q = question.toLowerCase();
-  if (!/intake|seat|matrix|cut.?off|institute|sanctioned|percentile|round/.test(q)) {
+  if (!/intake|itake|inake|seat|matrix|cut.?off|institute|sanctioned|percentile|round|course|branch/.test(q)) {
     return sources;
   }
+
+  if (intent === 'seat_matrix') {
+    const matrix = sources.filter((s) =>
+      /seat\s*matrix|sanctioned|engineering\s*cap|cap\s*seat|institute.?wise|intake\s*matrix/i.test(s.title),
+    );
+    if (matrix.length) return matrix;
+  }
+
+  if (intent === 'cutoff') {
+    const cutoff = sources.filter((s) =>
+      /cut.?off|cap\s*round|percentile|merit|ai\s*seat/i.test(s.title),
+    );
+    if (cutoff.length) return cutoff;
+  }
+
   const filtered = sources.filter((s) =>
-    /seat|matrix|cut.?off|brochure|information|engineering|cap/i.test(s.title),
+    /seat|matrix|cut.?off|brochure|information|engineering|cap|sanctioned|intake/i.test(s.title),
   );
   return filtered.length ? filtered : sources;
 }
