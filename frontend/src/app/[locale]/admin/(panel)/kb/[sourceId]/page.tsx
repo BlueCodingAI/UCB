@@ -199,6 +199,12 @@ export default function AdminKbDetailPage({ params }: { params: Promise<{ source
         }
       />
 
+      {doc.indexStatus === 'failed' && doc.indexError && (
+        <div className="mb-4 rounded-md border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
+          <strong>Indexing failed:</strong> {doc.indexError}
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Metadata editor */}
         <div className="space-y-6 lg:col-span-2">

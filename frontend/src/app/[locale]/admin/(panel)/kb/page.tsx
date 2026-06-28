@@ -244,6 +244,11 @@ export default function AdminKbPage() {
                   <Td className="text-ink-3">{d.topic ?? '—'}</Td>
                   <Td>
                     <Badge tone={indexTone(d.indexStatus)}>{d.indexStatus}</Badge>
+                    {d.indexStatus === 'failed' && d.indexError && (
+                      <p className="mt-1 max-w-[200px] text-xs text-danger line-clamp-2" title={d.indexError}>
+                        {d.indexError}
+                      </p>
+                    )}
                   </Td>
                   <Td>
                     <Switch

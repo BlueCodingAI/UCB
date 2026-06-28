@@ -3,7 +3,7 @@ import { db } from '../../db/connection';
 import { newId } from '../../lib/ids';
 import { now } from '../../lib/time';
 import { logger } from '../../lib/logger';
-import { env, integrations } from '../../config/env';
+import { integrations } from '../../config/env';
 import {
   embedBatch,
   currentEmbeddingModel,
@@ -34,9 +34,25 @@ function safeFileStem(title: string): string {
   return (s || 'document').slice(0, 80);
 }
 
-async function syncDocToOpenAI(doc: KbDocMeta, rawText: string): Promise<void> {
-  if (!integrations.openaiDocsEnabled) return;
+function assertFileExists(doc: KbDocMeta): void {
+  if (!doc.file_path) {
+    throw new Error('Document has no file on disk. Re-upload the PDF from Admin → KB.');
+  }
+  if (!fs.existsSync(doc.file_path)) {
+    throw new Error(
+      `File missing on server (${doc.file_path}). Re-upload the document — storage may have been cleared after deploy.`,
+    );
+  }
+}
+
+/** Upload KB file to OpenAI Files + Vector Store. Returns false when upload fails. */
+async function syncDocToOpenAI(doc: KbDocMeta, rawText: string): Promise<boolean> {
+  if (!integrations.openaiDocsEnabled) return false;
   try {
+    if (!integrations.openaiEnabled) {
+      throw new Error('OPENAI_API_KEY is not set. Add it to backend/.env and restart the server.');
+    }
+
     if (doc.openai_file_id) {
       const vsId = getVectorStoreId();
       if (vsId) await removeFileFromVectorStore(vsId, doc.openai_file_id);
@@ -44,14 +60,15 @@ async function syncDocToOpenAI(doc: KbDocMeta, rawText: string): Promise<void> {
     }
 
     const stem = safeFileStem(doc.title);
-    const isPdf = doc.source_type === 'pdf' && !!doc.file_path && fs.existsSync(doc.file_path);
+    const isPdf = doc.source_type === 'pdf';
 
-    if (!isPdf && !rawText.trim()) {
+    if (isPdf) {
+      assertFileExists(doc);
+    } else if (!rawText.trim()) {
       db.prepare(`UPDATE kb_documents SET openai_file_id=NULL, openai_file_status=NULL WHERE id=?`).run(doc.id);
-      return;
+      return false;
     }
 
-    // Always upload original PDF to OpenAI — the model parses tables natively.
     const fileId = isPdf
       ? await uploadOpenAIFile({ path: doc.file_path as string }, `${stem}.pdf`)
       : await uploadOpenAIFile(
@@ -66,13 +83,86 @@ async function syncDocToOpenAI(doc: KbDocMeta, rawText: string): Promise<void> {
       `UPDATE kb_documents SET openai_file_id=?, openai_file_status='uploaded', updated_at=? WHERE id=?`,
     ).run(fileId, now(), doc.id);
     logger.info({ documentId: doc.id, fileId }, 'kb index: uploaded to OpenAI doc engine');
+    return true;
   } catch (err) {
-    db.prepare(`UPDATE kb_documents SET openai_file_status='failed', updated_at=? WHERE id=?`).run(
-      now(),
-      doc.id,
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    db.prepare(
+      `UPDATE kb_documents SET openai_file_status='failed', index_error=?, updated_at=? WHERE id=?`,
+    ).run(message.slice(0, 2000), now(), doc.id);
     logger.error({ err, documentId: doc.id }, 'kb index: OpenAI doc engine upload failed');
+    return false;
   }
+}
+
+/** Best-effort local chunk + embed (never throws — used as optional supplement in PDF-only mode). */
+async function tryLocalIndex(documentId: string, doc: KbDocMeta): Promise<number> {
+  try {
+    const raw = await extractDocumentText(doc);
+    const prepared = prepareIndexChunks(raw, doc);
+    if (!prepared.length) return 0;
+
+    const vectors = await embedBatch(prepared.map((p) => p.embedText));
+    const ts = now();
+    db.transaction(() => {
+      db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(documentId);
+      for (let i = 0; i < prepared.length; i++) {
+        const p = prepared[i];
+        const vec = vectors[i];
+        insertChunkStmt.run(
+          newId(),
+          documentId,
+          i,
+          p.body,
+          p.tokenCount,
+          doc.language,
+          doc.course,
+          doc.cap_year,
+          doc.topic,
+          encodeEmbedding(vec),
+          vec.length,
+          currentEmbeddingModel(),
+          p.sourceLocator,
+          ts,
+        );
+      }
+    })();
+    return prepared.length;
+  } catch (err) {
+    logger.warn({ err, documentId }, 'kb index: local chunking skipped');
+    return 0;
+  }
+}
+
+/** PDF-only indexing: OpenAI upload is required; local parsing is optional. */
+async function indexDocumentPdfOnly(documentId: string, doc: KbDocMeta): Promise<void> {
+  if (doc.source_type === 'pdf') assertFileExists(doc);
+
+  let raw = '';
+  try {
+    raw = await extractDocumentText(doc);
+  } catch (err) {
+    logger.warn({ err, documentId }, 'kb index: PDF text extract skipped (OpenAI will parse PDF)');
+  }
+
+  const uploaded = await syncDocToOpenAI(doc, raw);
+  if (!uploaded) {
+    const row = db
+      .prepare('SELECT index_error FROM kb_documents WHERE id = ?')
+      .get(documentId) as { index_error: string | null } | undefined;
+    throw new Error(
+      row?.index_error ??
+        'OpenAI PDF upload failed. Check OPENAI_API_KEY, OPENAI_FILE_SEARCH=true, and pm2 logs.',
+    );
+  }
+
+  const chunkCount = await tryLocalIndex(documentId, doc);
+  const ts = now();
+  db.prepare(
+    `UPDATE kb_documents SET chunk_count=?, index_status='indexed', index_error=NULL,
+       indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
+  ).run(chunkCount, ts, currentEmbeddingModel(), ts, documentId);
+  rebuildVectorCache();
+  logger.info({ documentId, chunkCount, openai: true }, 'kb index: PDF-only indexed');
 }
 
 export async function indexDocument(documentId: string): Promise<void> {
@@ -95,6 +185,13 @@ export async function indexDocument(documentId: string): Promise<void> {
   );
 
   try {
+    if (integrations.openaiPdfOnly && integrations.openaiDocsEnabled) {
+      await indexDocumentPdfOnly(documentId, doc);
+      return;
+    }
+
+    if (doc.source_type === 'pdf') assertFileExists(doc);
+
     const raw = await extractDocumentText(doc);
     const prepared = prepareIndexChunks(raw, doc);
 

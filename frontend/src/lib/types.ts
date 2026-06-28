@@ -175,6 +175,8 @@ export interface KbDocument {
   topic: string | null;
   isActive: boolean;
   indexStatus: string;
+  indexError?: string | null;
+  openaiFileStatus?: string | null;
   chunkCount: number;
   createdAt: number;
   updatedAt: number;
