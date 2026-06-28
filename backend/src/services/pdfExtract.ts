@@ -1,17 +1,48 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { createRequire } from 'node:module';
 import { logger } from '../lib/logger';
 
-// pdfjs worker is required even in Node; point at the package copy.
-const workerSrc = path.join(
-  path.dirname(require.resolve('pdfjs-dist/package.json')),
-  'legacy',
-  'build',
-  'pdf.worker.mjs',
-);
-GlobalWorkerOptions.workerSrc = pathToFileURL(workerSrc).href;
+const backendRequire = createRequire(__filename);
+
+interface PdfJsModule {
+  getDocument: (src: Record<string, unknown>) => { promise: Promise<PdfDocument> };
+  GlobalWorkerOptions: { workerSrc: string };
+}
+
+interface PdfDocument {
+  numPages: number;
+  getPage(pageNum: number): Promise<PdfPage>;
+  destroy(): Promise<void>;
+}
+
+interface PdfPage {
+  getTextContent(): Promise<{
+    items: Array<{
+      str?: string;
+      transform: number[];
+      width?: number;
+      height?: number;
+    }>;
+  }>;
+}
+
+let pdfjs: PdfJsModule | null = null;
+
+/** Lazy-load pdf.js via require (CommonJS-safe; avoids TS .mjs import resolution issues). */
+function getPdfJs(): PdfJsModule {
+  if (pdfjs) return pdfjs;
+  pdfjs = backendRequire('pdfjs-dist/legacy/build/pdf.mjs') as PdfJsModule;
+  const workerSrc = path.join(
+    path.dirname(backendRequire.resolve('pdfjs-dist/package.json')),
+    'legacy',
+    'build',
+    'pdf.worker.mjs',
+  );
+  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(workerSrc).href;
+  return pdfjs;
+}
 
 interface TextItem {
   str: string;
@@ -26,12 +57,10 @@ const COLUMN_GAP_MIN = 14;
 const TABLE_MIN_COLUMNS = 3;
 const TABLE_MIN_ROWS = 2;
 
-/** Collapse repeated whitespace while preserving single spaces. */
 function cleanToken(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-/** Group positioned glyphs into reading-order lines. */
 function clusterLines(items: TextItem[]): TextItem[][] {
   if (!items.length) return [];
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
@@ -45,7 +74,6 @@ function clusterLines(items: TextItem[]): TextItem[][] {
   return lines;
 }
 
-/** Merge adjacent text items on the same line into column cells. */
 function lineToCells(line: TextItem[]): string[] {
   if (!line.length) return [];
   const cells: string[] = [];
@@ -69,7 +97,6 @@ function lineText(line: TextItem[]): string {
   return cleanToken(line.map((i) => i.str).join(' '));
 }
 
-/** True when consecutive lines share a similar column layout (tabular data). */
 function looksLikeTable(lines: TextItem[][]): boolean {
   if (lines.length < TABLE_MIN_ROWS) return false;
   const cellCounts = lines.map((l) => lineToCells(l).length);
@@ -79,7 +106,6 @@ function looksLikeTable(lines: TextItem[][]): boolean {
   return multiColRows >= TABLE_MIN_ROWS;
 }
 
-/** Render a detected table block as a Markdown table. */
 function formatTableBlock(lines: TextItem[][]): string {
   const rows = lines.map((l) => lineToCells(l)).filter((r) => r.some(Boolean));
   if (!rows.length) return '';
@@ -103,12 +129,10 @@ interface PageBlock {
   text?: string;
 }
 
-/** Split page lines into prose paragraphs vs table blocks. */
 function segmentPage(lines: TextItem[][]): PageBlock[] {
   const blocks: PageBlock[] = [];
   let i = 0;
   while (i < lines.length) {
-    // Try to grow a table starting at i.
     let j = i + TABLE_MIN_ROWS;
     let bestEnd = i;
     while (j <= lines.length) {
@@ -121,7 +145,6 @@ function segmentPage(lines: TextItem[][]): PageBlock[] {
       i = bestEnd;
       continue;
     }
-    // Prose: absorb until next table candidate or blank-ish break.
     const prose: string[] = [];
     while (i < lines.length) {
       const probe = lines.slice(i, Math.min(lines.length, i + TABLE_MIN_ROWS));
@@ -148,11 +171,8 @@ function renderPage(pageNum: number, blocks: PageBlock[]): string {
   return parts.join('\n\n');
 }
 
-/**
- * Extract structured text from a PDF using pdf.js layout positions.
- * Preserves page markers and converts detected tabular regions to Markdown tables.
- */
 export async function extractPdfText(filePath: string): Promise<string> {
+  const { getDocument } = getPdfJs();
   const buf = fs.readFileSync(filePath);
   const data = new Uint8Array(buf);
   const doc = await getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
@@ -189,7 +209,6 @@ export async function extractPdfText(filePath: string): Promise<string> {
   const out = pages.join('\n\n---\n\n').trim();
   if (out) return out;
 
-  // Last resort: legacy pdf-parse for scanned/image-only PDFs (often empty here too).
   logger.warn({ filePath }, 'pdfjs returned no text; falling back to pdf-parse');
   const pdfParse = (await import('pdf-parse')).default;
   const parsed = await pdfParse(buf);
