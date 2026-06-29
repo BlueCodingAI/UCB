@@ -1,6 +1,14 @@
 import { db } from '../db/connection';
 import { ANSWER_INTRO } from './groundingPrompt';
-import { parseCapMatrixFromText, type CapMatrixRecord, dedupeRecords } from './capMatrixParser';
+import {
+  parseCapMatrixFromText,
+  formatCapMatrixRecord,
+  type CapMatrixRecord,
+  dedupeRecords,
+} from './capMatrixParser';
+import { fetchCapMatrixRecordsFromDb } from './kbStructuredStore';
+import { generateAnswer, generateAnswerStream, type RetrievedChunk } from './openai';
+import { isFallbackAnswer } from './settings';
 import type { QueryAnalysis } from './queryAnalysis';
 import type { CitationDTO, Locale } from '../types';
 
@@ -110,6 +118,11 @@ export function fetchInstituteChunksFromDb(codes: string[]): ChunkRow[] {
 }
 
 export function recordsForInstitute(codes: string[]): CapMatrixRecord[] {
+  const saved = fetchCapMatrixRecordsFromDb(codes);
+  if (saved.length) {
+    return dedupeRecords(saved.map((s) => s.record));
+  }
+
   const chunks = fetchInstituteChunksFromDb(codes);
   const records: CapMatrixRecord[] = [];
 
@@ -119,7 +132,6 @@ export function recordsForInstitute(codes: string[]): CapMatrixRecord[] {
       records.push(rec);
       continue;
     }
-    // Fallback: parse raw chunk text if not structured record format.
     if (codes.some((c) => ch.content.includes(c))) {
       for (const r of parseCapMatrixFromText(ch.content)) {
         if (codes.includes(r.instituteCode)) records.push(r);
@@ -128,6 +140,91 @@ export function recordsForInstitute(codes: string[]): CapMatrixRecord[] {
   }
 
   return dedupeRecords(records);
+}
+
+function citationRowsForInstitute(codes: string[]): ChunkRow[] {
+  const saved = fetchCapMatrixRecordsFromDb(codes);
+  if (saved.length) {
+    return saved.map((s) => ({
+      chunkId: s.recordId,
+      documentId: s.documentId,
+      title: s.title,
+      content: formatCapMatrixRecord(s.record, s.title),
+      sourceLocator: s.sourceLocator,
+    }));
+  }
+  return fetchInstituteChunksFromDb(codes);
+}
+
+function structuredRecordsToChunks(codes: string[]): RetrievedChunk[] {
+  const saved = fetchCapMatrixRecordsFromDb(codes);
+  if (saved.length) {
+    return saved.map((s) => ({
+      documentId: s.documentId,
+      chunkId: s.recordId,
+      title: s.title,
+      content: formatCapMatrixRecord(s.record, s.title),
+      sourceLocator: s.sourceLocator,
+      score: 1,
+    }));
+  }
+  return fetchInstituteChunksFromDb(codes).map((c) => ({
+    documentId: c.documentId,
+    chunkId: c.chunkId,
+    title: c.title,
+    content: c.content,
+    sourceLocator: c.sourceLocator,
+    score: 0.98,
+  }));
+}
+
+function augmentQuestionForStructuredAnswer(question: string, analysis: QueryAnalysis): string {
+  const lines = [
+    question,
+    '',
+    'Counselling instructions (use the structured seat-matrix excerpts in context):',
+    '- Answer my specific question — do not dump every field from every course.',
+    '- Explain what each relevant number means (SI, MS, All India, G/L category seats) in plain language.',
+    '- If I asked about one branch or category, focus only on that.',
+    '- Ground every claim in the excerpts; do not invent numbers.',
+  ];
+  if (analysis.categoryHint) {
+    lines.push(`- I am asking about **${analysis.categoryHint}** category seats/cut-offs — use that column only.`);
+  }
+  return lines.join('\n');
+}
+
+function buildStructuredAnswerResult(params: {
+  content: string;
+  language: Locale;
+  chunks: ChunkRow[];
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+}): StructuredAnswerResult {
+  const citations: CitationDTO[] = params.chunks.slice(0, 8).map((c) => ({
+    documentId: c.documentId,
+    chunkId: c.chunkId,
+    title: c.title,
+    sourceLocator: c.sourceLocator,
+    score: 1,
+  }));
+
+  return {
+    content: params.content,
+    language: params.language,
+    citations,
+    isFallback: false,
+    retrievalScore: 1,
+    model: params.model,
+    promptTokens: params.promptTokens,
+    completionTokens: params.completionTokens,
+    sourceChunks: params.chunks.slice(0, 8).map((c) => ({
+      chunkId: c.chunkId,
+      documentId: c.documentId,
+      score: 1,
+    })),
+  };
 }
 
 function wantsCourseList(q: string): boolean {
@@ -242,48 +339,107 @@ export function buildInstituteMatrixAnswer(params: {
   ].join('\n');
 }
 
-export function tryStructuredInstituteAnswer(params: {
+export async function answerStructuredInstituteQuestion(params: {
   question: string;
   language: Locale;
   analysis: QueryAnalysis;
-}): StructuredAnswerResult | null {
+}): Promise<StructuredAnswerResult | null> {
   if (!params.analysis.instituteCodes.length) return null;
 
-  const chunks = fetchInstituteChunksFromDb(params.analysis.instituteCodes);
   const records = recordsForInstitute(params.analysis.instituteCodes);
   if (!records.length) return null;
 
-  const content = buildInstituteMatrixAnswer({
-    question: params.question,
-    language: params.language,
-    analysis: params.analysis,
-    records,
-    chunks,
+  const chunks = citationRowsForInstitute(params.analysis.instituteCodes);
+  const retrieved = structuredRecordsToChunks(params.analysis.instituteCodes);
+  const augmentedQuestion = augmentQuestionForStructuredAnswer(params.question, params.analysis);
+
+  const result = await generateAnswer(augmentedQuestion, retrieved, params.language, {
+    categoryHint: params.analysis.categoryHint,
+    structuredSeatMatrix: true,
   });
 
-  const citations: CitationDTO[] = chunks.slice(0, 8).map((c) => ({
-    documentId: c.documentId,
-    chunkId: c.chunkId,
-    title: c.title,
-    sourceLocator: c.sourceLocator,
-    score: 1,
-  }));
+  if (!result.content || isFallbackAnswer(result.content)) {
+    const fallback = buildInstituteMatrixAnswer({
+      question: params.question,
+      language: params.language,
+      analysis: params.analysis,
+      records,
+      chunks,
+    });
+    return buildStructuredAnswerResult({
+      content: fallback,
+      language: params.language,
+      chunks,
+      model: 'cap-matrix-template',
+      promptTokens: 0,
+      completionTokens: 0,
+    });
+  }
 
-  return {
-    content,
+  return buildStructuredAnswerResult({
+    content: result.content,
     language: params.language,
-    citations,
-    isFallback: false,
-    retrievalScore: 1,
-    model: 'cap-matrix-lookup',
-    promptTokens: 0,
-    completionTokens: 0,
-    sourceChunks: chunks.slice(0, 8).map((c) => ({
-      chunkId: c.chunkId,
-      documentId: c.documentId,
-      score: 1,
-    })),
-  };
+    chunks,
+    model: `structured+${result.model}`,
+    promptTokens: result.promptTokens,
+    completionTokens: result.completionTokens,
+  });
+}
+
+/** Stream a structured institute answer (LLM interprets saved seat-matrix rows). */
+export async function* streamStructuredInstituteAnswer(params: {
+  question: string;
+  language: Locale;
+  analysis: QueryAnalysis;
+}): AsyncGenerator<string, StructuredAnswerResult | null, void> {
+  if (!params.analysis.instituteCodes.length) return null;
+
+  const records = recordsForInstitute(params.analysis.instituteCodes);
+  if (!records.length) return null;
+
+  const chunks = citationRowsForInstitute(params.analysis.instituteCodes);
+  const retrieved = structuredRecordsToChunks(params.analysis.instituteCodes);
+  const augmentedQuestion = augmentQuestionForStructuredAnswer(params.question, params.analysis);
+
+  const gen = generateAnswerStream(augmentedQuestion, retrieved, params.language, {
+    categoryHint: params.analysis.categoryHint,
+    structuredSeatMatrix: true,
+  });
+
+  let next = await gen.next();
+  while (!next.done) {
+    yield next.value;
+    next = await gen.next();
+  }
+
+  const result = next.value;
+  if (!result.content || isFallbackAnswer(result.content)) {
+    const fallback = buildInstituteMatrixAnswer({
+      question: params.question,
+      language: params.language,
+      analysis: params.analysis,
+      records,
+      chunks,
+    });
+    yield fallback;
+    return buildStructuredAnswerResult({
+      content: fallback,
+      language: params.language,
+      chunks,
+      model: 'cap-matrix-template',
+      promptTokens: 0,
+      completionTokens: 0,
+    });
+  }
+
+  return buildStructuredAnswerResult({
+    content: result.content,
+    language: params.language,
+    chunks,
+    model: `structured+${result.model}`,
+    promptTokens: result.promptTokens,
+    completionTokens: result.completionTokens,
+  });
 }
 
 /** Re-export for tests — parse chunk bodies back to records. */

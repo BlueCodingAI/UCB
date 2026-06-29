@@ -233,6 +233,9 @@ CREATE TABLE IF NOT EXISTS kb_documents (
   -- its ingest status ('uploaded' once attached to the shared vector store).
   openai_file_id  TEXT,
   openai_file_status TEXT,
+  llama_cloud_file_id TEXT,
+  extract_type          TEXT,
+  structured_record_count INTEGER NOT NULL DEFAULT 0,
   uploaded_by     TEXT REFERENCES admin_users(id) ON DELETE SET NULL,
   indexed_at      INTEGER,
   created_at      INTEGER NOT NULL,
@@ -281,6 +284,54 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_chunk_doc_idx ON kb_chunks(document_id, chu
 CREATE INDEX IF NOT EXISTS ix_chunk_filter ON kb_chunks(is_active, language, course, cap_year)
   WHERE is_active = 1 AND embedding IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_chunk_doc     ON kb_chunks(document_id);
+
+-- Structured extraction cache: raw text + normalized CAP seat-matrix rows.
+-- Index time: extract → save here → optional vector chunks. Query time: SQL first.
+
+CREATE TABLE IF NOT EXISTS kb_document_extracts (
+  document_id     TEXT PRIMARY KEY REFERENCES kb_documents(id) ON DELETE CASCADE,
+  extract_type    TEXT NOT NULL CHECK (extract_type IN ('cap_matrix','prose','empty')),
+  raw_text        TEXT,
+  parser_version  TEXT NOT NULL DEFAULT '1',
+  record_count    INTEGER NOT NULL DEFAULT 0,
+  char_count      INTEGER NOT NULL DEFAULT 0,
+  extracted_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kb_cap_matrix_records (
+  id              TEXT PRIMARY KEY,
+  document_id     TEXT NOT NULL REFERENCES kb_documents(id) ON DELETE CASCADE,
+  institute_code  TEXT NOT NULL,
+  institute_name  TEXT NOT NULL,
+  institute_status TEXT,
+  choice_code     TEXT,
+  course_name     TEXT,
+  si              INTEGER,
+  ms_seats        INTEGER,
+  minority_seats  INTEGER,
+  all_india_seats INTEGER,
+  institute_seats INTEGER,
+  orphan_seats    INTEGER,
+  ews_seats       INTEGER,
+  cap_seats       INTEGER,
+  tfws_detail     TEXT,
+  source_page     INTEGER,
+  source_locator  TEXT,
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_cap_institute   ON kb_cap_matrix_records(institute_code);
+CREATE INDEX IF NOT EXISTS ix_cap_doc_inst    ON kb_cap_matrix_records(document_id, institute_code);
+CREATE INDEX IF NOT EXISTS ix_cap_choice      ON kb_cap_matrix_records(choice_code);
+
+CREATE TABLE IF NOT EXISTS kb_cap_category_seats (
+  id          TEXT PRIMARY KEY,
+  record_id   TEXT NOT NULL REFERENCES kb_cap_matrix_records(id) ON DELETE CASCADE,
+  category    TEXT NOT NULL,
+  subcategory TEXT,
+  seats       INTEGER,
+  raw_line    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_cap_cat_record ON kb_cap_category_seats(record_id);
 
 -- Full-text search over chunk content (FTS5; unicode61 folds Devanagari + Latin).
 CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(

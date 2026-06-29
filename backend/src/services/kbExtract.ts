@@ -7,6 +7,7 @@ import {
   parseCapMatrixFromText,
   formatCapMatrixRecord,
   recordSourceLocator,
+  type CapMatrixRecord,
 } from './capMatrixParser';
 import { parseCapMatrixSpreadsheet } from './capMatrixSpreadsheet';
 import {
@@ -95,32 +96,45 @@ export async function extractDocumentText(doc: KbDocMeta): Promise<string> {
   return extractPlainText(doc);
 }
 
-/** Chunk + attach embedding payloads and source locators for indexing. */
-export function prepareIndexChunks(raw: string, doc: KbDocMeta): Array<{
-  body: string;
-  embedText: string;
-  sourceLocator: string;
-  tokenCount: number;
-}> {
+/** Extract structured CAP seat-matrix records from raw document text. */
+export function extractCapMatrixRecords(doc: KbDocMeta, raw: string): CapMatrixRecord[] {
   const isSpreadsheet =
     doc.file_path != null &&
-    fs.existsSync(doc.file_path) &&
     /\.(xlsx|xls|csv)$/i.test(doc.file_path);
 
-  let capRecords = isSpreadsheet && doc.file_path
-    ? parseCapMatrixSpreadsheet(doc.file_path)
-    : [];
+  let capRecords =
+    isSpreadsheet && doc.file_path ? parseCapMatrixSpreadsheet(doc.file_path) : [];
 
   if (!capRecords.length && isCapMatrixContent(raw, doc.title)) {
     capRecords = parseCapMatrixFromText(raw);
   }
 
-  const useCapRecords =
-    capRecords.length >= (isSpreadsheet ? 1 : 2);
+  return capRecords;
+}
+
+export interface PreparedChunk {
+  body: string;
+  embedText: string;
+  sourceLocator: string;
+  tokenCount: number;
+  metadata: Record<string, unknown>;
+}
+
+/** Chunk + attach embedding payloads, source locators, and structured metadata for indexing. */
+export function prepareIndexChunks(raw: string, doc: KbDocMeta, recordIdByKey?: Map<string, string>): PreparedChunk[] {
+  const isSpreadsheet =
+    doc.file_path != null &&
+    fs.existsSync(doc.file_path) &&
+    /\.(xlsx|xls|csv)$/i.test(doc.file_path);
+
+  const capRecords = extractCapMatrixRecords(doc, raw);
+  const useCapRecords = capRecords.length >= (isSpreadsheet ? 1 : 2);
 
   if (useCapRecords) {
     return capRecords.map((r) => {
       const body = formatCapMatrixRecord(r, doc.title);
+      const key = `${r.instituteCode}|${r.choiceCode ?? ''}|${r.courseName ?? ''}`;
+      const recordId = recordIdByKey?.get(key);
       return {
         body,
         embedText: buildEmbeddingText({
@@ -132,6 +146,12 @@ export function prepareIndexChunks(raw: string, doc: KbDocMeta): Array<{
         }),
         sourceLocator: recordSourceLocator(r),
         tokenCount: estimateTokens(body),
+        metadata: {
+          recordType: 'cap_matrix',
+          recordId: recordId ?? null,
+          instituteCode: r.instituteCode,
+          choiceCode: r.choiceCode,
+        },
       };
     });
   }
@@ -152,5 +172,6 @@ export function prepareIndexChunks(raw: string, doc: KbDocMeta): Array<{
     }),
     sourceLocator: c.sourceLocator,
     tokenCount: estimateTokens(c.content),
+    metadata: { recordType: 'prose' },
   }));
 }

@@ -67,10 +67,23 @@ function requiredFormatBlock(language: Locale): string {
 
 export function buildGroundingSystemPrompt(
   language: Locale,
-  opts?: { includeContext?: boolean; categoryHint?: string | null },
+  opts?: { includeContext?: boolean; categoryHint?: string | null; structuredSeatMatrix?: boolean },
 ): string {
   const includeContext = opts?.includeContext !== false;
   const fb = getFallbackMessage(language);
+
+  const structuredBlock = opts?.structuredSeatMatrix
+    ? `
+STRUCTURED SEAT-MATRIX DATA (pre-verified at index time):
+- The context contains **verified structured records** extracted from the official seat matrix — treat every number as authoritative.
+- **Do NOT** reply with a raw data dump. **Interpret** the data and answer the user's exact question in natural counselling language.
+- Explain **only the fields relevant** to the question; skip unrelated courses or quota rows.
+- When explaining numbers, briefly clarify meaning once (e.g. "SI 180 means 180 total approved seats for this branch").
+- If the user asks about one course, answer for that course only. If they ask "all courses", list each with a one-line explanation.
+- If the user asks about a **category** (SC/ST/OBC/EWS/Open), read the **State Level G/L columns** for that category — do NOT confuse with All India seats.
+- End with practical CAP counselling context when helpful (e.g. MS seats are filled through Maharashtra CAP counselling).
+`
+    : '';
 
   const contextBlock = includeContext
     ? `
@@ -92,6 +105,7 @@ RULES:
 7. **Branding** — refer to the assistant only as **Disha** (दिशा in Hindi/Marathi). NEVER mention Gemini, Google, NotebookLM, ChatGPT, OpenAI, or any other AI vendor in the answer.
 
 ${seatMatrixRules(opts?.categoryHint ?? null)}
+${structuredBlock}
 
 ${requiredFormatBlock(language)}
 

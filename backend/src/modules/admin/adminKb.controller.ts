@@ -7,6 +7,7 @@ import { enqueue } from '../../services/jobs';
 import { embed } from '../../services/openai';
 import { downloadGoogleSheetToFile } from '../../services/googleSheet';
 import { retrieve, rebuildVectorCache } from '../../services/vectorStore';
+import { getDocumentExtractSummary } from '../../services/kbStructuredStore';
 import { getRagTopK, getRagMinScore, getSetting } from '../../services/settings';
 import { env } from '../../config/env';
 import type { Locale } from '../../types';
@@ -116,7 +117,19 @@ export const getDoc: RequestHandler = (req, res) => {
     tokenCount: c.tokenCount,
     sourceLocator: c.sourceLocator,
   }));
-  ok(res, { ...doc, chunks });
+  const extract = getDocumentExtractSummary(doc.id);
+  ok(res, {
+    ...doc,
+    chunks,
+    extract: extract
+      ? {
+          type: extract.extractType,
+          recordCount: extract.recordCount,
+          charCount: extract.charCount,
+          extractedAt: extract.extractedAt,
+        }
+      : null,
+  });
 };
 
 /** PUT /documents/:id — update metadata/tags. */

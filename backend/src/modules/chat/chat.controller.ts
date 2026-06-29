@@ -9,8 +9,10 @@ import {
 } from '../../services/openai';
 import { getFallbackMessage, isFallbackAnswer } from '../../services/settings';
 import { filterDocSources } from '../../services/queryAnalysis';
-import { tryStructuredInstituteAnswer } from '../../services/capMatrixLookup';
+import { streamStructuredInstituteAnswer } from '../../services/capMatrixLookup';
 import { integrations } from '../../config/env';
+import { retrieveFromLlamaCloud } from '../../services/llamaCloud.service';
+import { expandRetrievalQuery } from '../../services/queryAnalysis';
 import {
   answerQuestion,
   getDocPlan,
@@ -137,6 +139,56 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
   try {
     const analysis = analyzeQuery(content);
     const plan = getDocPlan();
+
+    if (integrations.llamaCloudIndexEnabled) {
+      const expanded = expandRetrievalQuery(englishQuery, analysis);
+      const chunks = await retrieveFromLlamaCloud(expanded, analysis.isInstituteLookup ? 30 : 20);
+      if (chunks.length) {
+        let fullText = '';
+        const gen = generateAnswerStream(englishQuery, chunks, language, {
+          categoryHint: analysis.categoryHint,
+        });
+        let next = await gen.next();
+        while (!next.done) {
+          fullText += next.value;
+          send({ delta: next.value });
+          next = await gen.next();
+        }
+        const result = next.value;
+        fullText = result.content || fullText;
+        if (!isFallbackAnswer(fullText)) {
+          const assistantMessage = persistAssistantTurn({
+            sessionId,
+            userId,
+            content: fullText,
+            language,
+            isGrounded: true,
+            isFallback: false,
+            citations: chunks.slice(0, 8).map((c) => ({
+              documentId: c.documentId,
+              chunkId: c.chunkId,
+              title: c.title,
+              sourceLocator: c.sourceLocator,
+              score: c.score,
+            })),
+            retrievalScore: chunks[0]?.score ?? 0,
+            model: `llama-cloud+${result.model}`,
+            promptTokens: result.promptTokens,
+            completionTokens: result.completionTokens,
+            sourceChunks: chunks.slice(0, 8).map((c) => ({
+              chunkId: c.chunkId,
+              documentId: c.documentId,
+              score: c.score,
+            })),
+            firstUserContent: session.title ? '' : content,
+          });
+          send({ done: true, message: assistantMessage });
+          res.end();
+          return;
+        }
+      }
+    }
+
     let sources = filterDocSources(plan.sources, content, analysis.intent);
     if (!sources.length) sources = plan.sources;
     const docMode = resolveDocMode(sources, analysis);
@@ -306,16 +358,24 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const streamStructuredInstitute = (): boolean => {
+    const streamStructuredInstitute = async (): Promise<boolean> => {
       if (!analysis.instituteCodes.length) return false;
-      const structured = tryStructuredInstituteAnswer({ question: content, language, analysis });
+
+      const gen = streamStructuredInstituteAnswer({ question: content, language, analysis });
+      let next = await gen.next();
+      let fullText = '';
+      while (!next.done) {
+        fullText += next.value;
+        send({ delta: next.value });
+        next = await gen.next();
+      }
+      const structured = next.value;
       if (!structured) return false;
 
-      send({ delta: structured.content });
       const assistantMessage = persistAssistantTurn({
         sessionId,
         userId,
-        content: structured.content,
+        content: structured.content || fullText,
         language,
         isGrounded: true,
         isFallback: false,
@@ -332,7 +392,7 @@ export async function streamMessage(req: Request, res: Response): Promise<void> 
       return true;
     };
 
-    if (streamStructuredInstitute()) return;
+    if (await streamStructuredInstitute()) return;
 
     if (plan.active && analysis.intent === 'seat_matrix' && (analysis.isInstituteLookup || analysis.isSeatMatrix)) {
       if (await streamDocEngine()) return;

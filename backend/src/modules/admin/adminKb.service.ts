@@ -15,6 +15,7 @@ import {
   deleteOpenAIFile,
 } from '../../services/openai';
 import { STORAGE_DIRS } from '../../middleware/upload';
+import { deleteStructuredData } from '../../services/kbStructuredStore';
 
 /** Best-effort: keep the shared vector store's membership in sync with active state. */
 function syncVectorStoreMembership(fileId: string | null | undefined, active: boolean): void {
@@ -67,6 +68,8 @@ export interface KbDocumentDTO {
   chunkCount: number;
   embeddingModel: string | null;
   openaiFileStatus: string | null;
+  extractType: string | null;
+  structuredRecordCount: number;
   indexedAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -93,6 +96,8 @@ export function mapKbDocument(r: any): KbDocumentDTO {
     chunkCount: r.chunk_count ?? 0,
     embeddingModel: r.embedding_model ?? null,
     openaiFileStatus: r.openai_file_status ?? null,
+    extractType: r.extract_type ?? null,
+    structuredRecordCount: r.structured_record_count ?? 0,
     indexedAt: r.indexed_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -353,6 +358,7 @@ export function softDelete(id: string): void {
   const tx = db.transaction(() => {
     db.prepare('UPDATE kb_documents SET deleted_at=?, is_active=0, openai_file_id=NULL, openai_file_status=NULL, updated_at=? WHERE id=?').run(ts, ts, id);
     db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(id);
+    deleteStructuredData(id);
   });
   tx();
   purgeOpenAIFile(fileId);

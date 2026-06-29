@@ -177,6 +177,8 @@ export interface KbDocument {
   indexStatus: string;
   indexError?: string | null;
   openaiFileStatus?: string | null;
+  extractType?: string | null;
+  structuredRecordCount?: number;
   chunkCount: number;
   createdAt: number;
   updatedAt: number;

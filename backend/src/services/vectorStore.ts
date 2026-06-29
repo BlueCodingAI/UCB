@@ -1,6 +1,8 @@
 import { db } from '../db/connection';
 import { logger } from '../lib/logger';
 import { fetchInstituteChunksFromDb } from './capMatrixLookup';
+import { fetchCapMatrixRecordsFromDb } from './kbStructuredStore';
+import { formatCapMatrixRecord } from './capMatrixParser';
 import type { Locale } from '../types';
 import type { RetrievedChunk } from './openai';
 
@@ -218,6 +220,24 @@ export function retrieveByInstituteCodes(codes: string[], maxChunks = 40): Retri
 
   const matched: RetrievedChunk[] = [];
   const seen = new Set<string>();
+
+  // Prefer saved structured rows (extract-once at index time).
+  for (const row of fetchCapMatrixRecordsFromDb(codes)) {
+    if (seen.has(row.recordId)) continue;
+    seen.add(row.recordId);
+    matched.push({
+      documentId: row.documentId,
+      chunkId: row.recordId,
+      title: row.title,
+      content: formatCapMatrixRecord(row.record),
+      sourceLocator: row.sourceLocator,
+      score: 0.99,
+    });
+  }
+
+  if (matched.length >= maxChunks) {
+    return matched.slice(0, maxChunks);
+  }
 
   for (const code of codes) {
     for (const c of cache) {

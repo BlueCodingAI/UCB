@@ -75,7 +75,7 @@ function extractFields(block: string): Partial<CapMatrixRecord> {
   const ccLine = block.match(/choice\s*code\s*:?\s*(0\d{4}\d{5,6}T?)/i);
   if (ccLine) choiceCode = ccLine[1];
   else {
-    const all = [...block.matchAll(CHOICE_CODE)].map((m) => m[1]);
+    const all = block.match(/\b(0\d{4}\d{5,6}T?)\b/g) ?? [];
     choiceCode = all.find((c) => !c.endsWith('T') && c.length === 10) ?? all[0] ?? null;
   }
 

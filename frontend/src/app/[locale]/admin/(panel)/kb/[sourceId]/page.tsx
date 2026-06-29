@@ -26,6 +26,12 @@ interface ChunkPreview {
 }
 interface KbDocumentDetail extends KbDocument {
   chunks: ChunkPreview[];
+  extract?: {
+    type: string;
+    recordCount: number;
+    charCount: number;
+    extractedAt: number | null;
+  } | null;
 }
 
 function indexTone(status: string): BadgeTone {
@@ -188,7 +194,7 @@ export default function AdminKbDetailPage({ params }: { params: Promise<{ source
       <BackLink />
       <AdminPageHeader
         title={doc.title}
-        description={`${(doc.sourceType ?? 'document').replace(/_/g, ' ')} · ${doc.chunkCount ?? 0} chunks`}
+        description={`${(doc.sourceType ?? 'document').replace(/_/g, ' ')} · ${doc.structuredRecordCount ?? 0} structured rows · ${doc.chunkCount ?? 0} chunks`}
         actions={
           <>
             <Badge tone={indexTone(doc.indexStatus)}>{doc.indexStatus}</Badge>
@@ -202,6 +208,17 @@ export default function AdminKbDetailPage({ params }: { params: Promise<{ source
       {doc.indexStatus === 'failed' && doc.indexError && (
         <div className="mb-4 rounded-md border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
           <strong>Indexing failed:</strong> {doc.indexError}
+        </div>
+      )}
+
+      {doc.indexStatus === 'indexed' && (
+        <div className="mb-4 rounded-md border border-border bg-surface-sunk/40 px-4 py-3 text-sm text-ink-2">
+          <strong>Extracted data:</strong>{' '}
+          {doc.extract?.type === 'cap_matrix' && (doc.structuredRecordCount ?? 0) > 0
+            ? `${doc.structuredRecordCount} seat-matrix rows saved — chat answers use this structured data first.`
+            : doc.extract?.type === 'prose'
+              ? `${doc.extract.charCount.toLocaleString()} characters saved for search.`
+              : 'No structured rows detected. Upload a Google Sheet / XLSX seat matrix for best institute lookup accuracy.'}
         </div>
       )}
 

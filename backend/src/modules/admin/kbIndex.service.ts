@@ -4,6 +4,7 @@ import { newId } from '../../lib/ids';
 import { now } from '../../lib/time';
 import { logger } from '../../lib/logger';
 import { integrations } from '../../config/env';
+import { indexFileToLlamaCloud, parsePdfWithLlamaParse } from '../../services/llamaCloud.service';
 import {
   embedBatch,
   currentEmbeddingModel,
@@ -19,14 +20,16 @@ import {
   extractDocumentText,
   prepareIndexChunks,
   type KbDocMeta,
+  type PreparedChunk,
 } from '../../services/kbExtract';
+import { persistStructuredExtract } from '../../services/kbStructuredExtract';
 import { registerJobHandler } from '../../services/jobs';
 
 const insertChunkStmt = db.prepare(
   `INSERT INTO kb_chunks
      (id, document_id, chunk_index, content, token_count, language, course, cap_year, topic,
       is_active, embedding, embedding_dim, embedding_model, source_locator, metadata_json, created_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, '{}', ?)`,
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
 );
 
 function safeFileStem(title: string): string {
@@ -94,38 +97,88 @@ async function syncDocToOpenAI(doc: KbDocMeta, rawText: string): Promise<boolean
   }
 }
 
+async function writeIndexedChunks(
+  documentId: string,
+  doc: KbDocMeta,
+  prepared: PreparedChunk[],
+): Promise<void> {
+  const vectors = await embedBatch(prepared.map((p) => p.embedText));
+  const ts = now();
+
+  const writeAll = db.transaction(() => {
+    db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(documentId);
+    for (let i = 0; i < prepared.length; i++) {
+      const p = prepared[i];
+      const vec = vectors[i];
+      insertChunkStmt.run(
+        newId(),
+        documentId,
+        i,
+        p.body,
+        p.tokenCount,
+        doc.language,
+        doc.course,
+        doc.cap_year,
+        doc.topic,
+        encodeEmbedding(vec),
+        vec.length,
+        currentEmbeddingModel(),
+        p.sourceLocator,
+        JSON.stringify(p.metadata),
+        ts,
+      );
+    }
+    db.prepare(
+      `UPDATE kb_documents SET chunk_count=?, index_status='indexed', index_error=NULL,
+         indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
+    ).run(prepared.length, ts, currentEmbeddingModel(), ts, documentId);
+  });
+  writeAll();
+  rebuildVectorCache();
+}
+
+/**
+ * Core index path: extract text → save structured rows → chunk + embed for search fallback.
+ */
+async function indexDocumentWithExtract(documentId: string, doc: KbDocMeta, raw: string): Promise<void> {
+  const persisted = persistStructuredExtract(documentId, doc, raw);
+  const prepared = prepareIndexChunks(raw, doc, persisted.recordIdByKey);
+
+  if (!prepared.length) {
+    db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(documentId);
+    db.prepare(
+      `UPDATE kb_documents SET chunk_count=0, index_status='indexed', index_error=NULL,
+         indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
+    ).run(now(), currentEmbeddingModel(), now(), documentId);
+    rebuildVectorCache();
+    await syncDocToOpenAI(doc, raw);
+    logger.info({ documentId, extractType: persisted.extractType }, 'kb index: no chunks; extract saved');
+    return;
+  }
+
+  await writeIndexedChunks(documentId, doc, prepared);
+  await syncDocToOpenAI(doc, raw);
+  logger.info(
+    {
+      documentId,
+      chunks: prepared.length,
+      structuredRecords: persisted.recordCount,
+      extractType: persisted.extractType,
+      chars: raw.length,
+    },
+    'kb index: extracted, saved, and indexed',
+  );
+}
+
 /** Best-effort local chunk + embed (never throws — used as optional supplement in PDF-only mode). */
 async function tryLocalIndex(documentId: string, doc: KbDocMeta): Promise<number> {
   try {
     const raw = await extractDocumentText(doc);
-    const prepared = prepareIndexChunks(raw, doc);
+    const persisted = persistStructuredExtract(documentId, doc, raw);
+    const prepared = prepareIndexChunks(raw, doc, persisted.recordIdByKey);
     if (!prepared.length) return 0;
 
-    const vectors = await embedBatch(prepared.map((p) => p.embedText));
-    const ts = now();
-    db.transaction(() => {
-      db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(documentId);
-      for (let i = 0; i < prepared.length; i++) {
-        const p = prepared[i];
-        const vec = vectors[i];
-        insertChunkStmt.run(
-          newId(),
-          documentId,
-          i,
-          p.body,
-          p.tokenCount,
-          doc.language,
-          doc.course,
-          doc.cap_year,
-          doc.topic,
-          encodeEmbedding(vec),
-          vec.length,
-          currentEmbeddingModel(),
-          p.sourceLocator,
-          ts,
-        );
-      }
-    })();
+    await writeIndexedChunks(documentId, doc, prepared);
     return prepared.length;
   } catch (err) {
     logger.warn({ err, documentId }, 'kb index: local chunking skipped');
@@ -156,13 +209,46 @@ async function indexDocumentPdfOnly(documentId: string, doc: KbDocMeta): Promise
   }
 
   const chunkCount = await tryLocalIndex(documentId, doc);
+  logger.info({ documentId, chunkCount, openai: true }, 'kb index: PDF-only indexed');
+}
+
+/** LlamaParse only — agentic PDF → markdown → embed in SQLite (no pipeline id). */
+async function indexDocumentLlamaParse(documentId: string, doc: KbDocMeta): Promise<void> {
+  if (doc.source_type !== 'pdf') {
+    throw new Error('LlamaParse mode supports PDF uploads. Use PDF or disable LLAMA_CLOUD_ENABLED.');
+  }
+  assertFileExists(doc);
+
+  const markdown = await parsePdfWithLlamaParse(doc.file_path as string);
+  await indexDocumentWithExtract(documentId, doc, markdown);
+}
+
+/** LlamaCloud managed Index — optional; needs pipeline id. */
+async function indexDocumentLlamaCloudIndex(documentId: string, doc: KbDocMeta): Promise<void> {
+  if (doc.source_type !== 'pdf') {
+    throw new Error('LlamaCloud mode currently supports PDF uploads. Convert other types to PDF or disable LLAMA_CLOUD_ENABLED.');
+  }
+  assertFileExists(doc);
+
+  const fileId = await indexFileToLlamaCloud(doc.file_path as string, {
+    documentId: doc.id,
+    title: doc.title,
+  });
+
+  let raw = '';
+  try {
+    raw = await extractDocumentText(doc);
+    persistStructuredExtract(documentId, doc, raw);
+  } catch (err) {
+    logger.warn({ err, documentId }, 'kb index: structured extract skipped for LlamaCloud Index doc');
+  }
+
   const ts = now();
   db.prepare(
-    `UPDATE kb_documents SET chunk_count=?, index_status='indexed', index_error=NULL,
-       indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
-  ).run(chunkCount, ts, currentEmbeddingModel(), ts, documentId);
-  rebuildVectorCache();
-  logger.info({ documentId, chunkCount, openai: true }, 'kb index: PDF-only indexed');
+    `UPDATE kb_documents SET llama_cloud_file_id=?, chunk_count=0, index_status='indexed', index_error=NULL,
+       indexed_at=?, embedding_model='llama-cloud', updated_at=? WHERE id=?`,
+  ).run(fileId, ts, ts, documentId);
+  logger.info({ documentId, fileId }, 'kb index: LlamaCloud indexed');
 }
 
 export async function indexDocument(documentId: string): Promise<void> {
@@ -185,6 +271,16 @@ export async function indexDocument(documentId: string): Promise<void> {
   );
 
   try {
+    if (integrations.llamaCloudIndexEnabled) {
+      await indexDocumentLlamaCloudIndex(documentId, doc);
+      return;
+    }
+
+    if (integrations.llamaCloudEnabled) {
+      await indexDocumentLlamaParse(documentId, doc);
+      return;
+    }
+
     if (integrations.openaiPdfOnly && integrations.openaiDocsEnabled) {
       await indexDocumentPdfOnly(documentId, doc);
       return;
@@ -193,55 +289,7 @@ export async function indexDocument(documentId: string): Promise<void> {
     if (doc.source_type === 'pdf') assertFileExists(doc);
 
     const raw = await extractDocumentText(doc);
-    const prepared = prepareIndexChunks(raw, doc);
-
-    if (!prepared.length) {
-      db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(documentId);
-      db.prepare(
-        `UPDATE kb_documents SET chunk_count=0, index_status='indexed', index_error=NULL,
-           indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
-      ).run(now(), currentEmbeddingModel(), now(), documentId);
-      rebuildVectorCache();
-      await syncDocToOpenAI(doc, raw);
-      logger.info({ documentId }, 'kb index: no extractable text; indexed empty');
-      return;
-    }
-
-    const vectors = await embedBatch(prepared.map((p) => p.embedText));
-
-    const ts = now();
-    const writeAll = db.transaction(() => {
-      db.prepare('DELETE FROM kb_chunks WHERE document_id = ?').run(documentId);
-      for (let i = 0; i < prepared.length; i++) {
-        const p = prepared[i];
-        const vec = vectors[i];
-        insertChunkStmt.run(
-          newId(),
-          documentId,
-          i,
-          p.body,
-          p.tokenCount,
-          doc.language,
-          doc.course,
-          doc.cap_year,
-          doc.topic,
-          encodeEmbedding(vec),
-          vec.length,
-          currentEmbeddingModel(),
-          p.sourceLocator,
-          ts,
-        );
-      }
-      db.prepare(
-        `UPDATE kb_documents SET chunk_count=?, index_status='indexed', index_error=NULL,
-           indexed_at=?, embedding_model=?, updated_at=? WHERE id=?`,
-      ).run(prepared.length, ts, currentEmbeddingModel(), ts, documentId);
-    });
-    writeAll();
-
-    rebuildVectorCache();
-    await syncDocToOpenAI(doc, raw);
-    logger.info({ documentId, chunks: prepared.length, chars: raw.length }, 'kb index: indexed');
+    await indexDocumentWithExtract(documentId, doc, raw);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     db.prepare(

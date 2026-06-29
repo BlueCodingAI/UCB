@@ -64,9 +64,9 @@ export const env = {
   // context (the model sees ALL info, incl. complete tables); otherwise we use
   // file_search retrieval. Falls back to the local SQLite RAG when disabled / no key.
   openaiFileSearchEnabled: bool('OPENAI_FILE_SEARCH', true),
-  // When true (default), chat/voice answers use ONLY OpenAI's PDF file understanding
-  // (Responses API + attached PDFs / file_search). Local SQLite RAG is skipped.
-  openaiPdfOnly: bool('OPENAI_PDF_ONLY', true),
+  // When false (recommended), local SQLite RAG + structured institute lookup run first;
+  // OpenAI doc engine is used as fallback. When true, chat skips local RAG entirely.
+  openaiPdfOnly: bool('OPENAI_PDF_ONLY', false),
   openaiDocModel: str('OPENAI_DOC_MODEL', 'gpt-4o'),
   // ~70K tokens of source (≈4 chars/token) — well within gpt-4o's 128K context,
   // leaving room for the prompt + a long table answer.
@@ -75,6 +75,12 @@ export const env = {
   // Outbound proxy for OpenAI requests (e.g. when the server is behind a firewall).
   openaiProxyEnabled: bool('OPENAI_PROXY_ENABLED', false),
   openaiProxyUrl: str('OPENAI_PROXY_URL'), // http(s)://[user:pass@]host:port
+
+  // LlamaCloud (LlamaParse + managed Index) — recommended for complex PDF tables.
+  // Create a pipeline at https://cloud.llamaindex.ai and paste its id below.
+  llamaCloudApiKey: str('LLAMA_CLOUD_API_KEY'),
+  llamaCloudPipelineId: str('LLAMA_CLOUD_PIPELINE_ID'),
+  llamaCloudEnabled: bool('LLAMA_CLOUD_ENABLED', false),
 
   // Sarvam
   sarvamApiKey: str('SARVAM_API_KEY'),
@@ -130,6 +136,13 @@ export const integrations = {
   openaiDocsEnabled: Boolean(env.openaiApiKey) && env.openaiFileSearchEnabled,
   /** Chat uses OpenAI PDF engine only — no local vector RAG. */
   openaiPdfOnly: Boolean(env.openaiApiKey) && env.openaiFileSearchEnabled && env.openaiPdfOnly,
+  /** LlamaCloud API available (Parse and/or Index). */
+  llamaCloudEnabled: env.llamaCloudEnabled && Boolean(env.llamaCloudApiKey),
+  /** Managed Index retrieval (optional — requires pipeline id). */
+  llamaCloudIndexEnabled:
+    env.llamaCloudEnabled &&
+    Boolean(env.llamaCloudApiKey) &&
+    Boolean(env.llamaCloudPipelineId),
   sarvamEnabled: Boolean(env.sarvamApiKey),
   razorpayEnabled: Boolean(env.razorpayKeyId && env.razorpayKeySecret),
   emailEnabled: Boolean(env.smtpHost && env.smtpUser),

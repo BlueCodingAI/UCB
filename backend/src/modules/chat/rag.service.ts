@@ -30,11 +30,12 @@ import {
   filterDocSources,
   type QueryAnalysis,
 } from '../../services/queryAnalysis';
-import { tryStructuredInstituteAnswer } from '../../services/capMatrixLookup';
+import { answerStructuredInstituteQuestion } from '../../services/capMatrixLookup';
 import { effectivePlan } from '../../middleware/auth';
 import { db } from '../../db/connection';
 import { env, integrations } from '../../config/env';
 import { logger } from '../../lib/logger';
+import { retrieveFromLlamaCloud } from '../../services/llamaCloud.service';
 import type { CitationDTO, Locale } from '../../types';
 
 /** Max combined PDF bytes to attach all files in context (whole_file mode). */
@@ -299,7 +300,7 @@ async function answerQuestionHybrid(params: {
   const { englishQuery } = await detectAndTranslate(question);
 
   if (analysis.instituteCodes.length) {
-    const structured = tryStructuredInstituteAnswer({ question, language, analysis });
+    const structured = await answerStructuredInstituteQuestion({ question, language, analysis });
     if (structured) return structured;
   }
 
@@ -345,10 +346,49 @@ async function answerQuestionHybrid(params: {
   return buildLocalAnswer(language, retrieved, result, false);
 }
 
+async function answerViaLlamaCloud(params: {
+  question: string;
+  englishQuery: string;
+  language: Locale;
+  analysis: QueryAnalysis;
+}): Promise<AnswerResult | null> {
+  const expanded = expandRetrievalQuery(params.englishQuery, params.analysis);
+  const retrieved = await retrieveFromLlamaCloud(expanded, params.analysis.isInstituteLookup ? 30 : 20);
+  if (!retrieved.length) return null;
+
+  const result = await generateAnswer(params.englishQuery, retrieved, params.language, {
+    categoryHint: params.analysis.categoryHint,
+  });
+  if (isFallbackAnswer(result.content)) return null;
+
+  return {
+    content: result.content,
+    language: params.language,
+    citations: retrieved.slice(0, 8).map((c) => ({
+      documentId: c.documentId,
+      chunkId: c.chunkId,
+      title: c.title,
+      sourceLocator: c.sourceLocator,
+      score: c.score,
+    })),
+    isFallback: false,
+    retrievalScore: retrieved[0]?.score ?? 0,
+    model: `llama-cloud+${result.model}`,
+    promptTokens: result.promptTokens,
+    completionTokens: result.completionTokens,
+    sourceChunks: retrieved.slice(0, 8).map((c) => ({
+      chunkId: c.chunkId,
+      documentId: c.documentId,
+      score: c.score,
+    })),
+  };
+}
+
 /**
  * KB-grounded answer.
- * OPENAI_PDF_ONLY=true (default): OpenAI Responses API reads uploaded PDFs directly.
- * OPENAI_PDF_ONLY=false: hybrid local RAG + structured lookup + doc engine fallback.
+ * LLAMA_CLOUD_ENABLED: LlamaParse + managed Index retrieval (best for PDF tables).
+ * OPENAI_PDF_ONLY: OpenAI Responses API reads uploaded PDFs directly.
+ * Otherwise: hybrid local RAG + doc engine fallback.
  */
 export async function answerQuestion(params: {
   question: string;
@@ -356,9 +396,20 @@ export async function answerQuestion(params: {
   userId?: string | null;
 }): Promise<AnswerResult> {
   const { question, userId } = params;
-  const { language } = await detectAndTranslate(question);
+  const { language, englishQuery } = await detectAndTranslate(question);
   const analysis = analyzeQuery(question);
   const plan = getDocPlan();
+
+  if (integrations.llamaCloudIndexEnabled) {
+    const llamaAnswer = await answerViaLlamaCloud({ question, englishQuery, language, analysis });
+    if (llamaAnswer) return llamaAnswer;
+    logger.warn('LlamaCloud Index retrieval empty; falling back');
+  }
+
+  // LlamaParse mode: PDFs were parsed to markdown and embedded locally at index time.
+  if (integrations.llamaCloudEnabled) {
+    return answerQuestionHybrid({ question, language, userId, analysis, plan });
+  }
 
   if (integrations.openaiPdfOnly) {
     if (!plan.active) {

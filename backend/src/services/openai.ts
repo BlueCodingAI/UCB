@@ -139,9 +139,12 @@ export async function generateAnswer(
   question: string,
   chunks: RetrievedChunk[],
   language: Locale,
-  opts?: { categoryHint?: string | null },
+  opts?: { categoryHint?: string | null; structuredSeatMatrix?: boolean },
 ): Promise<ChatResult> {
-  const system = buildGroundingSystemPrompt(language, { categoryHint: opts?.categoryHint ?? null })
+  const system = buildGroundingSystemPrompt(language, {
+    categoryHint: opts?.categoryHint ?? null,
+    structuredSeatMatrix: opts?.structuredSeatMatrix,
+  })
     .replace('{{RETRIEVED_CHUNKS}}', buildContext(chunks))
     .replaceAll('{{LANGUAGE}}', language);
 
@@ -181,9 +184,12 @@ export async function* generateAnswerStream(
   question: string,
   chunks: RetrievedChunk[],
   language: Locale,
-  opts?: { categoryHint?: string | null },
+  opts?: { categoryHint?: string | null; structuredSeatMatrix?: boolean },
 ): AsyncGenerator<string, ChatResult, void> {
-  const system = buildGroundingSystemPrompt(language, { categoryHint: opts?.categoryHint ?? null })
+  const system = buildGroundingSystemPrompt(language, {
+    categoryHint: opts?.categoryHint ?? null,
+    structuredSeatMatrix: opts?.structuredSeatMatrix,
+  })
     .replace('{{RETRIEVED_CHUNKS}}', buildContext(chunks))
     .replaceAll('{{LANGUAGE}}', language);
 

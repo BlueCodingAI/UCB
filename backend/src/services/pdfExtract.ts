@@ -44,6 +44,20 @@ function getPdfJs(): PdfJsModule {
   return pdfjs;
 }
 
+/** Page count for LlamaParse batching (agentic tier max is 1000 pages per job). */
+export async function getPdfPageCount(filePath: string): Promise<number> {
+  const { getDocument } = getPdfJs();
+  const buf = fs.readFileSync(filePath);
+  const doc = await getDocument({
+    data: new Uint8Array(buf),
+    useSystemFonts: true,
+    isEvalSupported: false,
+  }).promise;
+  const count = doc.numPages;
+  await doc.destroy();
+  return count;
+}
+
 interface TextItem {
   str: string;
   x: number;

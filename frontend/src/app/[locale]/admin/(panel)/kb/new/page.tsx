@@ -95,9 +95,13 @@ export default function AdminKbNewPage() {
           ...(inputKind === 'url' ? { sourceUrl: url.trim() } : { content: content.trim() }),
         };
       }
-      const doc = await api.post<KbDocument>('/admin/kb/documents', body, { realm: 'admin' });
+      const res = await api.post<{ document: KbDocument; jobId: string; indexing: string }>(
+        '/admin/kb/documents',
+        body,
+        { realm: 'admin' },
+      );
       toast('Source added — indexing started.', 'success');
-      router.replace(`/admin/kb/${doc.id}`);
+      router.replace(`/admin/kb/${res.document.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not add the source.');
       setSaving(false);
